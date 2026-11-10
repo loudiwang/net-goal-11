@@ -4,13 +4,13 @@
 
 # Net Goal 11
 
-**FIFA 11 局域网对战联机工具 · LAN-play tunnel for FIFA 11**
+**LAN-play tunnel for FIFA 11 · FIFA 11 局域网对战联机工具**
 
-[简体中文](#简体中文) · [English](#english)
+[English](#english) · [简体中文](#简体中文)
 
-- 仓库 / Repository：<https://github.com/loudiwang/net-goal-11>
-- 许可证 / License：[GNU GPL v3.0](LICENSE)
-- 克隆 / Clone：
+- Repository / 仓库：<https://github.com/loudiwang/net-goal-11>
+- License / 许可证：[GNU GPL v3.0](LICENSE)
+- Clone / 克隆：
 
   ```bash
   git clone https://github.com/loudiwang/net-goal-11.git
@@ -18,30 +18,106 @@
 
 ---
 
+## English
+
+Net Goal 11 is a LAN-play tunneling tool for **FIFA 11** (native C++, release 1.02).
+
+FIFA 11 keeps its multiplayer mode inside the local network, so players in different cities
+cannot see each other's rooms. Net Goal 11 injects a small x86 Hook into the game and relays the
+game's UDP traffic straight to a public relay server, which forwards it to the other players.
+Everyone ends up in the game's ordinary LAN mode, as if all the machines were plugged into the
+same switch — no public IP, no router port forwarding and no virtual network adapter driver.
+
+### Features
+
+- **FIFA 11 LAN play over the internet** — the game keeps using its standard LAN mode; the
+  tunneling is completely transparent to it.
+- **Direct Hook-to-relay path** — `game → Hook → public relay → peers`, with no extra local IPC
+  hop and no per-packet polling, which keeps latency low.
+- **Virtual LAN spoofing** — the Hook fakes a `10.213.77.0/24` subnet, so the game still sees
+  ordinary LAN broadcast and unicast traffic.
+- **Room system** — room list and join-by-room-code, optional room passwords, and `1v1` `2v2`
+  `3v3` `4v4` `5v5` modes.
+- **Simple sign-in** — start the client, enter the relay IP, the UDP port, a nickname and the
+  shared passphrase `goal11`, pick the game executable, then create or join a room.
+- **Relay server for two platforms** — Linux (`epoll`, single static musl binary) and Windows
+  (`select`, for local testing).
+- **Live status** — up/down traffic counters and a run log in the main window.
+
+### Screenshots
+
+| Login window | Main window |
+| --- | --- |
+| ![Login window](docs/images/screenshot-login.png) | ![Main window](docs/images/screenshot-main.png) |
+
+- **Login window** — relay server IP, port (default `45888`), in-game nickname and the shared
+  passphrase `goal11`.
+- **Main window** — game platform list on the left, room list in the middle (room code, host,
+  mode, player count), nickname / game executable / single-player launch on the right, plus live
+  traffic counters and the run log at the bottom.
+
+### Repository layout
+
+```text
+Net Goal 11/
+  README.md              this file
+  docs/images/           screenshots and artwork used by this README
+  native/
+    common/              protocol, version, game-name tables
+    hook/                x86 Hook injected into the game (direct relay)
+    client/              Win32 client and login window
+    server/              Linux / Windows UDP relay server
+    build/               one-shot build with Zig
+    tests/               manual / semi-automatic network and UI tests
+```
+
+### Quick start
+
+```powershell
+# 1. build (needs Zig 0.17+); output goes to native/dist/
+powershell -ExecutionPolicy Bypass -File .\native\build\build_all.ps1
+
+# 2. run the relay server locally for testing
+.\native\dist\server-win-x64\"Net Goal 11.Server.exe" --port 45888
+```
+
+On a Linux VPS, unpack `Net Goal 11-server-linux-x64.zip` and run `sudo bash deploy-linux.sh`.
+Remember to open the chosen **UDP port** (default `45888`) in the firewall and cloud security group.
+
+Then start `Net Goal 11.exe`, enter the relay IP, port `45888`, your nickname and the passphrase
+`goal11`, pick your game executable, create or join a room and start the match.
+
+### Compatibility
+
+- client and Hook must be x86 — the FIFA 11 executable is 32-bit;
+- build client, Hook and server from the same revision;
+- the protocol is not encrypted (room passwords are only hashed), so do not send sensitive data
+  over untrusted networks.
+
+---
+
 ## 简体中文
 
 Net Goal 11 是一个 **FIFA 11 局域网对战** 联机工具（原生 C++ 版，Release 1.02）。
 
-FIFA 11 的对战模式只在局域网（LAN）里可见，异地玩家原本无法互相加入。本工具把游戏
+FIFA 11 的对战模式只在局域网（LAN）里可见，异地玩家原本无法互相加入房间。本工具把游戏
 发出的 UDP 数据通过注入游戏的 Hook 直接中继到一台公网服务器，再由服务器转发给对手，
 让不同城市的玩家像接在同一台交换机上一样进入游戏的 LAN 对战模式——不需要公网 IP，
 不需要路由器端口映射，也不需要安装虚拟网卡驱动。
 
-本目录是**开源免注册版**（GPL-3.0 许可证），没有机器码、`license.dat`、注册窗口和注册机。
-
 ### 功能特性
 
-- **FIFA 11 LAN 对战联机**：游戏里照常进入 LAN 模式，联机过程对游戏完全透明。
+- **FIFA 11 局域网对战联机**：游戏里照常进入 LAN 模式，联机过程对游戏完全透明。
 - **Hook 直连中继**：数据面路径为 `游戏主程序 → Hook → 公网中继 → 对手`，不再多绕一次
   本地 IPC 和非停轮询，延迟更低。
 - **虚拟局域网伪装**：Hook 为游戏伪造 `10.213.77.0/24` 虚拟网段，游戏看到的仍是标准
   局域网广播与单播。
 - **房间系统**：房间列表 / 房间号直连、可选房间密码、`1v1` `2v2` `3v3` `4v4` `5v5`
   五种对战模式。
-- **无授权门槛**：登录窗口只要填服务器 IP、UDP 端口、昵称和固定口令 `goal11`。
+- **登录简单**：打开客户端，填中继服务器 IP、UDP 端口、昵称和固定口令 `goal11`，选好游戏
+  主程序，即可创建或加入房间。
 - **双平台服务端**：Linux（`epoll`，静态 musl 单文件）与 Windows（`select`，本机测试用）。
-- **同时可装多套**：源码、二进制名、日志名、窗口类名、服务名各自独立，可与保留注册机
-  的同源版本 `Link Goal 11` 装在同一台机器上。
+- **运行状态可见**：主窗口实时显示上下行流量与运行日志。
 
 ### 界面截图
 
@@ -87,8 +163,6 @@ powershell -ExecutionPolicy Bypass -File .\native\build\build_all.ps1
 - `server-win-x64/Net Goal 11.Server.exe`（本机测试）
 - 对应的 zip 分发包
 
-Windows 7 版本需要额外指定 32 位 msvcrt 工具链，见 `native/README.md`。
-
 #### 2. 启动服务器
 
 Linux（默认 UDP 45888）：
@@ -114,7 +188,7 @@ Windows 本机测试：
 - 昵称：默认 `net11`，可随意修改
 - 密码：固定口令 `goal11`
 
-然后按 `native/README.md` 中的步骤设置游戏路径、创建/加入房间并开始比赛。
+然后设置游戏主程序路径，创建或加入房间即可开始比赛。
 
 ### 版本与兼容性
 
@@ -132,84 +206,7 @@ Windows 本机测试：
 
 ---
 
-## English
-
-**Net Goal 11** is a LAN-play tunneling tool for **FIFA 11** (native C++, release 1.02).
-
-FIFA 11 only exposes its multiplayer mode on a local network, so players in different places
-cannot normally join each other. Net Goal 11 injects a small x86 Hook into the game and relays
-the game's UDP traffic straight to a public relay server, which forwards it to the other players.
-Everyone ends up in the game's normal LAN mode as if they were plugged into the same switch —
-no public IP, no router port forwarding, and no virtual network adapter driver required.
-
-This directory is the **open-source, registration-free edition** (GPL-3.0): no machine ID,
-no `license.dat`, no registration window and no key generator.
-
-### Features
-
-- **FIFA 11 LAN play over the internet** — the game keeps using its standard LAN mode; the
-  tunneling is completely transparent to it.
-- **Hook-to-relay data path** — `game → Hook → public relay → peers`, skipping the extra local
-  IPC hop and the per-packet polling of the older design, which reduces latency.
-- **Virtual LAN spoofing** — the Hook fakes a `10.213.77.0/24` subnet, so the game still sees
-  ordinary LAN broadcast and unicast traffic.
-- **Room system** — room list and join-by-code, optional room passwords, and `1v1` `2v2` `3v3`
-  `4v4` `5v5` modes.
-- **No licensing friction** — the login window only asks for the relay IP, UDP port, nickname
-  and the fixed passphrase `goal11`.
-- **Relay server for two platforms** — Linux (`epoll`, single static musl binary) and Windows
-  (`select`, for local testing).
-- **Coexists with other builds** — source tree, binary names, log names, window classes and
-  service names are all distinct, so it can live next to the registration-based variant.
-
-### Screenshots
-
-| Login window | Main window |
-| --- | --- |
-| ![Login window](docs/images/screenshot-login.png) | ![Main window](docs/images/screenshot-main.png) |
-
-### Repository layout
-
-```text
-Net Goal 11/
-  README.md              this file
-  docs/images/           screenshots and artwork used by this README
-  native/
-    common/              protocol, version, game-name tables
-    hook/                x86 Hook injected into the game (direct relay)
-    client/              Win32 client and login window
-    server/              Linux / Windows UDP relay server
-    build/               one-shot build with Zig
-    tests/               manual / semi-automatic network and UI tests
-```
-
-### Quick start
-
-```powershell
-# 1. build (needs Zig 0.17+); output goes to native/dist/
-powershell -ExecutionPolicy Bypass -File .\native\build\build_all.ps1
-
-# 2. run the relay server locally for testing
-.\native\dist\server-win-x64\"Net Goal 11.Server.exe" --port 45888
-```
-
-On a Linux VPS, unpack `Net Goal 11-server-linux-x64.zip` and run `sudo bash deploy-linux.sh`.
-Remember to open the chosen **UDP port** (default `45888`) in the firewall and cloud security group.
-
-Then start `Net Goal 11.exe`, enter the relay IP, port `45888`, your nickname and the passphrase
-`goal11`, pick your game executable, create or join a room and start the match.
-See [`native/README.md`](native/README.md) for the full build, deployment and protocol notes.
-
-### Compatibility
-
-- Client and Hook must be x86 — the game executable is 32-bit;
-- build client, Hook and server from the same revision;
-- the protocol is not encrypted (room passwords are only hashed), so do not send sensitive
-  data over untrusted networks.
-
----
-
-## 许可证 / License
+## License / 许可证
 
 本项目采用 [GNU General Public License v3.0](LICENSE) 开源发布。
 This project is released under the [GNU General Public License v3.0](LICENSE).
