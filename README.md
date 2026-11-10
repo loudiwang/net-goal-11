@@ -217,6 +217,21 @@ Windows 本机测试：
 - `lobby_test.cpp` / `lobby_list_test.cpp` / `lobby_peer.cpp`：大厅协议测试
 - `ui_test.ps1` / `ui_step.ps1`：Windows 界面自动化脚本
 
+## Credits
+
+- **[FIFAConnector](https://github.com/Pilo11/FIFAConnector)** by Nils B. — the FIFA 11 LAN-play
+  workflow of Net Goal 11 (room discovery and negotiation, and relaying the game's UDP traffic so
+  remote players end up in the game's normal LAN mode) was designed with reference to this
+  project. FIFAConnector is MIT licensed; its notice is reproduced in
+  [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+## 致谢
+
+- **[FIFAConnector](https://github.com/Pilo11/FIFAConnector)**（作者 Nils B.）：Net Goal 11 的
+  FIFA 11 局域网对战流程（客户端之间的房间发现与协商，以及把游戏 UDP 流量中继给远端玩家，
+  使其进入游戏原生 LAN 模式）参考了该项目。FIFAConnector 采用 MIT 许可证，其声明收录在
+  [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
+
 ---
 
 ## License / 许可证
