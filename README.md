@@ -50,11 +50,18 @@ same switch — no public IP, no router port forwarding and no virtual network a
 | --- | --- |
 | ![Login window](docs/images/screenshot-login.png) | ![Main window](docs/images/screenshot-main.png) |
 
+<p align="center">
+  <img src="docs/images/screenshot-room.png" alt="Create room dialog" width="520">
+</p>
+
 - **Login window** — relay server IP, port (default `45888`), in-game nickname and the shared
   passphrase `goal11`.
 - **Main window** — game platform list on the left, room list in the middle (room code, host,
   mode, player count), nickname / game executable / single-player launch on the right, plus live
   traffic counters and the run log at the bottom.
+- **Create room dialog** — room code, optional room password and the `1v1` `2v2` `3v3` `4v4`
+  `5v5` mode selector; after creating the room you are taken into it and can share the room code
+  with the other players.
 
 ### Repository layout
 
@@ -125,9 +132,15 @@ FIFA 11 的对战模式只在局域网（LAN）里可见，异地玩家原本无
 | --- | --- |
 | ![登录窗口](docs/images/screenshot-login.png) | ![主界面](docs/images/screenshot-main.png) |
 
+<p align="center">
+  <img src="docs/images/screenshot-room.png" alt="新建房间" width="520">
+</p>
+
 - **登录窗口**：填写中继服务器 IP、端口（默认 `45888`）、游戏内昵称和固定口令 `goal11`。
 - **主界面**：左侧对战游戏平台，中间房间列表（房间号 / 房主 / 模式 / 人数），右侧设置
   昵称、游戏主程序路径、启动单机游戏，底部实时显示上下行流量与运行日志。
+- **新建房间**：填写房间号、可选房间密码，选择 `1v1` `2v2` `3v3` `4v4` `5v5` 对战模式；
+  创建后自动进入房间，把房间号告诉其他玩家即可加入。
 
 ### 目录结构
 
