@@ -1,0 +1,15 @@
+# Keep shell scripts LF so they run on Linux after `git clone`.
+*.sh    text eol=lf
+*.cpp   text eol=crlf
+*.h     text eol=crlf
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.md    text eol=lf
+*.ini   text eol=crlf
+
+# Binary assets
+*.exe   binary
+*.dll   binary
+*.ico   binary
+*.jpg   binary
+*.zip   binary
