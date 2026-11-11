@@ -1,14 +1,17 @@
-// Net Goal 11 - encrypted transport between clients/hooks and the relay server.
+// Net Goal 11 - encrypted, server-authenticated transport.
 //
-// Handshake:  ephemeral X25519 (client) + ephemeral X25519 (server)
+// Handshake:  X25519 ephemeral (client) + X25519 ephemeral (server) + X25519
+//             static server key.  The session key mixes both shared secrets,
+//             so only a peer that knows the server's static private key can
+//             derive it.  Clients pin the static public key on first use
+//             (TOFU), which turns the handshake into real server
+//             authentication: an impostor cannot produce a valid confirmation
+//             tag.
 // Cipher:     XSalsa20-Poly1305 (NaCl secretbox) with per-direction keys,
-//             a per-direction random nonce prefix and a 64-bit packet counter.
+//             a per-direction nonce prefix and a 64-bit packet counter.
 // Framing:    16-byte header (magic, version, type, length, counter) followed
-//             by the ciphertext and a 16-byte tag.
-//
-// The handshake is not authenticated, so it protects against passive
-// eavesdropping but not against an active man-in-the-middle.  The goal of this
-// layer is to keep lobby and relay traffic unreadable on the wire.
+//             by the payload and a 16-byte tag (data frames) or a 16-byte
+//             Poly1305 confirmation tag (handshake reply).
 #pragma once
 
 #include <string.h>
@@ -19,11 +22,11 @@
 namespace ngs {
 
 static constexpr uint32_t kMagic = 0x3145474Eu; // 'N' 'G' 'E' '1'
-static constexpr uint8_t kVersion = 1;
+static constexpr uint8_t kVersion = 2;
 
 enum FrameType : uint8_t {
     FrameInit = 1,   // client -> server: ephemeral public key + random
-    FrameReply = 2,  // server -> client: ephemeral public key + random
+    FrameReply = 2,  // server -> client: static key + ephemeral key + random + tag
     FrameData = 3,   // both directions: encrypted payload
 };
 
@@ -31,10 +34,12 @@ static constexpr size_t kHeaderSize = 16;
 static constexpr size_t kTagSize = 16;
 static constexpr size_t kPubSize = 32;
 static constexpr size_t kRandomSize = 16;
-static constexpr size_t kHandshakePayload = kPubSize + kRandomSize; // 48
-static constexpr size_t kOverhead = kHeaderSize + kTagSize;         // 32
-static constexpr size_t kMaxPlain = fr::kMaxDatagram;               // 1432
-static constexpr size_t kMaxFrame = kMaxPlain + kOverhead;          // 1464
+static constexpr size_t kHandshakePayload = kPubSize + kRandomSize;         // 48
+static constexpr size_t kReplyPayload = kPubSize + kPubSize + kRandomSize;   // 80
+static constexpr size_t kReplyFrame = kHeaderSize + kReplyPayload + kTagSize;
+static constexpr size_t kOverhead = kHeaderSize + kTagSize;                  // 32
+static constexpr size_t kMaxPlain = fr::kMaxDatagram;                        // 1432
+static constexpr size_t kMaxFrame = kMaxPlain + kOverhead;                   // 1464
 
 inline void WriteFrameHeader(uint8_t* out, uint8_t type, uint16_t length, uint64_t counter) {
     fr::Write32(out, kMagic);
@@ -55,19 +60,24 @@ inline void MakeNonce(uint8_t nonce[24], const uint8_t prefix[16], uint64_t coun
     for (int i = 0; i < 8; ++i) nonce[16 + i] = static_cast<uint8_t>(counter >> (56 - 8 * i));
 }
 
-inline void Kdf(const char* label, const uint8_t shared[32], const uint8_t clientPub[32],
-                const uint8_t serverPub[32], const uint8_t clientRandom[16],
-                const uint8_t serverRandom[16], uint8_t out[32]) {
-    uint8_t buffer[160];
+// Hashes a fixed-size derivation transcript:
+//   label[32] || dhA[32] || dhB[32] || clientPub[32] || serverEphPub[32]
+//   || clientRandom[16] || serverRandom[16]
+inline void Kdf(const char* label, const uint8_t dhA[32], const uint8_t dhB[32],
+                const uint8_t clientPub[32], const uint8_t serverEphPub[32],
+                const uint8_t clientRandom[16], const uint8_t serverRandom[16],
+                uint8_t out[32]) {
+    uint8_t buffer[192];
     memset(buffer, 0, sizeof(buffer));
     size_t n = strlen(label);
     if (n > 32) n = 32;
     memcpy(buffer, label, n);
-    memcpy(buffer + 32, shared, 32);
-    memcpy(buffer + 64, clientPub, 32);
-    memcpy(buffer + 96, serverPub, 32);
-    memcpy(buffer + 128, clientRandom, 16);
-    memcpy(buffer + 144, serverRandom, 16);
+    memcpy(buffer + 32, dhA, 32);
+    memcpy(buffer + 64, dhB, 32);
+    memcpy(buffer + 96, clientPub, 32);
+    memcpy(buffer + 128, serverEphPub, 32);
+    memcpy(buffer + 160, clientRandom, 16);
+    memcpy(buffer + 176, serverRandom, 16);
     uint8_t hash[64];
     ngc::Sha512(buffer, sizeof(buffer), hash);
     memcpy(out, hash, 32);
@@ -77,9 +87,18 @@ struct Channel {
     bool isServer = false;
     bool ready = false;
 
+    // Ephemeral key pair (both roles).
     uint8_t priv[32] = {};
     uint8_t pub[32] = {};
+    // Peer's ephemeral public key.
     uint8_t peerPub[32] = {};
+
+    // Server long-term key (server role) and the pinned/learned server key
+    // (client role).
+    uint8_t staticPriv[32] = {};
+    uint8_t staticPub[32] = {};
+    uint8_t peerStatic[32] = {};
+
     uint8_t clientRandom[16] = {};
     uint8_t serverRandom[16] = {};
 
@@ -87,6 +106,7 @@ struct Channel {
     uint8_t rxKey[32] = {};
     uint8_t txPrefix[16] = {};
     uint8_t rxPrefix[16] = {};
+    uint8_t confirmKey[32] = {};
 
     uint64_t txCounter = 0;
     bool rxSeen = false;
@@ -100,12 +120,16 @@ struct Channel {
         memset(priv, 0, sizeof(priv));
         memset(pub, 0, sizeof(pub));
         memset(peerPub, 0, sizeof(peerPub));
+        memset(staticPriv, 0, sizeof(staticPriv));
+        memset(staticPub, 0, sizeof(staticPub));
+        memset(peerStatic, 0, sizeof(peerStatic));
         memset(clientRandom, 0, sizeof(clientRandom));
         memset(serverRandom, 0, sizeof(serverRandom));
         memset(txKey, 0, sizeof(txKey));
         memset(rxKey, 0, sizeof(rxKey));
         memset(txPrefix, 0, sizeof(txPrefix));
         memset(rxPrefix, 0, sizeof(rxPrefix));
+        memset(confirmKey, 0, sizeof(confirmKey));
         txCounter = 0;
         rxSeen = false;
         rxMax = 0;
@@ -114,18 +138,27 @@ struct Channel {
     }
 
     void Derive() {
-        uint8_t shared[32] = {};
-        ngc::X25519(shared, priv, peerPub);
+        uint8_t dhEphemeral[32] = {};
+        uint8_t dhStatic[32] = {};
+        if (isServer) {
+            ngc::X25519(dhEphemeral, priv, peerPub);        // (server eph, client eph)
+            ngc::X25519(dhStatic, staticPriv, peerPub);     // (server static, client eph)
+        } else {
+            ngc::X25519(dhEphemeral, priv, peerPub);        // (client eph, server eph)
+            ngc::X25519(dhStatic, priv, peerStatic);        // (client eph, server static)
+        }
 
-        uint8_t c2sKey[32], s2cKey[32], c2sPrefix[32], s2cPrefix[32];
-        Kdf("NetGoal11 c2s key", shared, peerPubOrClient(), serverPubOrClient(),
+        uint8_t c2sKey[32], s2cKey[32], c2sPrefix[32], s2cPrefix[32], confirm[32];
+        Kdf("NetGoal11 v2 c2s key", dhEphemeral, dhStatic, ClientPub(), ServerEphPub(),
             clientRandom, serverRandom, c2sKey);
-        Kdf("NetGoal11 s2c key", shared, peerPubOrClient(), serverPubOrClient(),
+        Kdf("NetGoal11 v2 s2c key", dhEphemeral, dhStatic, ClientPub(), ServerEphPub(),
             clientRandom, serverRandom, s2cKey);
-        Kdf("NetGoal11 c2s nonce", shared, peerPubOrClient(), serverPubOrClient(),
+        Kdf("NetGoal11 v2 c2s nonce", dhEphemeral, dhStatic, ClientPub(), ServerEphPub(),
             clientRandom, serverRandom, c2sPrefix);
-        Kdf("NetGoal11 s2c nonce", shared, peerPubOrClient(), serverPubOrClient(),
+        Kdf("NetGoal11 v2 s2c nonce", dhEphemeral, dhStatic, ClientPub(), ServerEphPub(),
             clientRandom, serverRandom, s2cPrefix);
+        Kdf("NetGoal11 v2 confirm", dhEphemeral, dhStatic, ClientPub(), ServerEphPub(),
+            clientRandom, serverRandom, confirm);
 
         if (isServer) {
             memcpy(txKey, s2cKey, 32);
@@ -138,15 +171,19 @@ struct Channel {
             memcpy(txPrefix, c2sPrefix, 16);
             memcpy(rxPrefix, s2cPrefix, 16);
         }
+        memcpy(confirmKey, confirm, 32);
         txCounter = 0;
         rxSeen = false;
         rxMax = 0;
         rxBitmap = 0;
-        memset(shared, 0, sizeof(shared));
+        memset(dhEphemeral, 0, sizeof(dhEphemeral));
+        memset(dhStatic, 0, sizeof(dhStatic));
     }
 
-    const uint8_t* peerPubOrClient() const { return isServer ? peerPub : pub; }
-    const uint8_t* serverPubOrClient() const { return isServer ? pub : peerPub; }
+    // Transcript accessors: the client's ephemeral key is `pub` on the client
+    // and `peerPub` on the server; the server's ephemeral key is the reverse.
+    const uint8_t* ClientPub() const { return isServer ? peerPub : pub; }
+    const uint8_t* ServerEphPub() const { return isServer ? pub : peerPub; }
 
     // ---- client side -------------------------------------------------------
     void BeginClientHandshake(uint64_t nowMs) {
@@ -165,33 +202,72 @@ struct Channel {
         return true;
     }
 
-    bool HandleReply(const uint8_t* frame, size_t length, uint64_t nowMs) {
-        if (ready) return false; // a late duplicate reply - keys already set
-        if (length != kHeaderSize + kHandshakePayload) return false;
+    // Extracts the server's static public key from a reply frame.  Callers use
+    // this to check (or establish) the pinned key before trusting the reply.
+    static bool PeekReplyStatic(const uint8_t* frame, size_t length, uint8_t out[32]) {
+        if (length != kReplyFrame) return false;
         if (frame[5] != FrameReply) return false;
-        const uint8_t* serverPub = frame + kHeaderSize;
-        const uint8_t* random = serverPub + kPubSize;
-        memcpy(peerPub, serverPub, kPubSize);
+        memcpy(out, frame + kHeaderSize, kPubSize);
+        return true;
+    }
+
+    // Verifies the server's confirmation tag and installs the session keys.
+    // `expectedStatic` is the pinned server key; when it is not null the reply
+    // must carry exactly that key or the handshake is rejected.
+    bool HandleReply(const uint8_t* frame, size_t length, const uint8_t* expectedStatic,
+                     uint64_t nowMs) {
+        if (ready) return false; // a late duplicate reply - keys already set
+        if (length != kReplyFrame) return false;
+        if (frame[5] != FrameReply) return false;
+
+        const uint8_t* staticPubIn = frame + kHeaderSize;
+        const uint8_t* ephPubIn = staticPubIn + kPubSize;
+        const uint8_t* random = ephPubIn + kPubSize;
+        const uint8_t* tag = random + kRandomSize;
+
+        if (expectedStatic && memcmp(expectedStatic, staticPubIn, kPubSize) != 0) return false;
+
+        memcpy(peerStatic, staticPubIn, kPubSize);
+        memcpy(peerPub, ephPubIn, kPubSize);
         memcpy(serverRandom, random, kRandomSize);
         Derive();
+
+        uint8_t expected[kTagSize];
+        ngc::Poly1305(expected, frame + kHeaderSize, kReplyPayload, confirmKey);
+        if (!ngc::ConstantTimeEqual(expected, tag, kTagSize)) {
+            // The peer does not hold the static private key (or the reply was
+            // modified in flight): never trust anything derived from it.
+            memset(peerStatic, 0, sizeof(peerStatic));
+            memset(peerPub, 0, sizeof(peerPub));
+            memset(serverRandom, 0, sizeof(serverRandom));
+            memset(txKey, 0, sizeof(txKey));
+            memset(rxKey, 0, sizeof(rxKey));
+            memset(confirmKey, 0, sizeof(confirmKey));
+            return false;
+        }
         ready = true;
         lastSeenMs = nowMs;
         return true;
     }
 
     // ---- server side -------------------------------------------------------
-    bool HandleInit(const uint8_t* frame, size_t length, uint8_t* reply, size_t& replyLen,
+    bool HandleInit(const uint8_t* frame, size_t length, const uint8_t staticPrivIn[32],
+                    const uint8_t staticPubIn[32], uint8_t* reply, size_t& replyLen,
                     uint64_t nowMs) {
         if (length != kHeaderSize + kHandshakePayload) return false;
         if (frame[5] != FrameInit) return false;
         const uint8_t* clientPub = frame + kHeaderSize;
         const uint8_t* random = clientPub + kPubSize;
 
-        bool samePeer = ready && isServer && memcmp(peerPub, clientPub, kPubSize) == 0 &&
-                        memcmp(clientRandom, random, kRandomSize) == 0;
+        bool samePeer = ready && isServer &&
+                        memcmp(staticPub, staticPubIn, kPubSize) == 0 &&
+                        memcmp(clientRandom, random, kRandomSize) == 0 &&
+                        memcmp(peerPub, clientPub, kPubSize) == 0;
         if (!samePeer) {
             Reset();
             isServer = true;
+            memcpy(staticPriv, staticPrivIn, 32);
+            memcpy(staticPub, staticPubIn, 32);
             memcpy(peerPub, clientPub, kPubSize);
             memcpy(clientRandom, random, kRandomSize);
             ngc::X25519Keypair(pub, priv);
@@ -201,10 +277,15 @@ struct Channel {
         }
         lastSeenMs = nowMs;
 
-        replyLen = kHeaderSize + kHandshakePayload;
-        WriteFrameHeader(reply, FrameReply, static_cast<uint16_t>(kHandshakePayload), 0);
-        memcpy(reply + kHeaderSize, pub, kPubSize);
-        memcpy(reply + kHeaderSize + kPubSize, serverRandom, kRandomSize);
+        // Reply: static key + ephemeral key + random, authenticated with the
+        // confirmation key only the two peers can derive.
+        replyLen = kReplyFrame;
+        WriteFrameHeader(reply, FrameReply, static_cast<uint16_t>(kReplyPayload), 0);
+        memcpy(reply + kHeaderSize, staticPub, kPubSize);
+        memcpy(reply + kHeaderSize + kPubSize, pub, kPubSize);
+        memcpy(reply + kHeaderSize + kPubSize + kPubSize, serverRandom, kRandomSize);
+        ngc::Poly1305(reply + kHeaderSize + kReplyPayload, reply + kHeaderSize, kReplyPayload,
+                      confirmKey);
         return true;
     }
 

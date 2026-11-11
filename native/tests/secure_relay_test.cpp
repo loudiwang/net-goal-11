@@ -25,6 +25,7 @@ struct Peer {
     SOCKET socket = INVALID_SOCKET;
     sockaddr_in server{};
     ngs::Channel channel;
+    uint8_t serverKey[32] = {};
     uint64_t token = 0;
     uint32_t virtualIp = 0;
 };
@@ -48,7 +49,9 @@ static bool Handshake(Peer& peer) {
         if (received <= 0) continue;
         if (!ngs::IsSecureFrame(buffer, (size_t)received)) continue;
         if (buffer[5] != ngs::FrameReply) continue;
-        if (peer.channel.HandleReply(buffer, (size_t)received, GetTickCount64())) return true;
+        if (!ngs::Channel::PeekReplyStatic(buffer, (size_t)received, peer.serverKey)) continue;
+        if (peer.channel.HandleReply(buffer, (size_t)received, nullptr, GetTickCount64()))
+            return true;
     }
     return false;
 }

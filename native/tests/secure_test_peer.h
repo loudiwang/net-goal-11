@@ -17,6 +17,7 @@ struct SecureTestPeer {
     int socket = -1;
     sockaddr_in server = {};
     ngs::Channel channel = {};
+    uint8_t serverKey[32] = {}; // long-term key advertised by the server
 
     static uint64_t NowMs() {
 #ifdef _WIN32
@@ -59,7 +60,7 @@ struct SecureTestPeer {
         socket = -1;
     }
 
-    bool Handshake(int timeoutMs) {
+    bool Handshake(int timeoutMs, const uint8_t* expectedStatic = nullptr) {
         channel.BeginClientHandshake(NowMs());
         uint8_t init[ngs::kMaxFrame];
         size_t initLength = 0;
@@ -78,7 +79,10 @@ struct SecureTestPeer {
             if (received <= 0) continue;
             if (!ngs::IsSecureFrame(buffer, (size_t)received)) continue;
             if (buffer[5] != ngs::FrameReply) continue;
-            if (channel.HandleReply(buffer, (size_t)received, NowMs())) return true;
+            if (!ngs::Channel::PeekReplyStatic(buffer, (size_t)received, serverKey)) continue;
+            if (expectedStatic && memcmp(expectedStatic, serverKey, 32) != 0) return false;
+            if (channel.HandleReply(buffer, (size_t)received, expectedStatic, NowMs()))
+                return true;
         }
         return false;
     }

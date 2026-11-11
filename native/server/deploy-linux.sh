@@ -43,3 +43,7 @@ echo
 echo "Server installed. Open UDP 45888 in the cloud security group and OS firewall."
 echo "Check:  ss -lunp | grep 45888"
 echo "Logs:   journalctl -u net-goal-11 -f"
+echo
+echo "The server key lives in /var/lib/net-goal-11/server.key; its fingerprint is"
+echo "printed at startup and clients pin it on first connect. Delete the file to"
+echo "rotate the key (every client then has to clear its pinned key as well)."

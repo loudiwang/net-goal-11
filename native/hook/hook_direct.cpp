@@ -26,6 +26,7 @@
 #include <algorithm>
 #include "../common/protocol.h"
 #include "../common/secure.h"
+#include "../common/pinned_keys.h"
 
 #ifndef SIO_ROUTING_INTERFACE_QUERY
 #define SIO_ROUTING_INTERFACE_QUERY 0xC8000014
@@ -458,14 +459,19 @@ static DWORD WINAPI RelayThread(LPVOID)
     LogInfo("relay connecting to %s:%d local=%s", g_cfg.serverHost.c_str(), g_cfg.serverPort,
             IpToString(g_cfg.localIp).c_str());
 
-    // Encrypted transport: exchange ephemeral X25519 keys with the relay.  The
-    // server answers only to a valid handshake, so a failed handshake means the
-    // relay is unreachable or running an incompatible version.
+    // Encrypted, authenticated transport: exchange X25519 keys with the relay
+    // and require the server's pinned long-term key (trust on first use).
     {
         std::lock_guard<std::mutex> lock(g_relaySecureMutex);
         g_relayChannel.BeginClientHandshake(GetTickCount64());
     }
     {
+        char endpointText[64];
+        snprintf(endpointText, sizeof(endpointText), "%s:%u",
+                 fr::IpToString(server.sin_addr.s_addr).c_str(),
+                 (unsigned)ntohs(server.sin_port));
+        const std::string endpoint = endpointText;
+
         uint8_t init[ngs::kMaxFrame];
         size_t initLength = 0;
         {
@@ -473,6 +479,7 @@ static DWORD WINAPI RelayThread(LPVOID)
             g_relayChannel.BuildInit(init, initLength);
         }
         bool established = false;
+        bool keyRejected = false;
         ULONGLONG deadline = GetTickCount64() + 3000;
         ULONGLONG nextSend = 0;
         while (g_relayRunning.load(std::memory_order_relaxed) && GetTickCount64() < deadline) {
@@ -491,15 +498,44 @@ static DWORD WINAPI RelayThread(LPVOID)
             if (received <= 0) continue;
             if (!ngs::IsSecureFrame(buffer, (size_t)received)) continue;
             if (buffer[5] != ngs::FrameReply) continue;
-            std::lock_guard<std::mutex> lock(g_relaySecureMutex);
-            if (g_relayChannel.HandleReply(buffer, (size_t)received, GetTickCount64())) {
-                established = true;
+
+            uint8_t serverKey[32] = {};
+            if (!ngs::Channel::PeekReplyStatic(buffer, (size_t)received, serverKey)) continue;
+
+            uint8_t pinned[32] = {};
+            bool known = ngp::LoadPin(endpoint, pinned);
+            if (known && !ngc::ConstantTimeEqual(pinned, serverKey, 32)) {
+                keyRejected = true;
+                SendRelayStatus(fr::RelayError,
+                                "The relay server encryption key changed; delete the pinned key "
+                                "file to continue");
+                LogError("relay key mismatch for %s: pinned %s received %s (store %s)",
+                         endpoint.c_str(), ngp::Fingerprint(pinned).c_str(),
+                         ngp::Fingerprint(serverKey).c_str(), ngp::StorePath().c_str());
                 break;
             }
+
+            {
+                std::lock_guard<std::mutex> lock(g_relaySecureMutex);
+                if (!g_relayChannel.HandleReply(buffer, (size_t)received, serverKey,
+                                                GetTickCount64()))
+                    continue;
+            }
+
+            if (!known) {
+                if (ngp::SavePin(endpoint, serverKey))
+                    LogInfo("pinned relay key %s for %s", ngp::Fingerprint(serverKey).c_str(),
+                            endpoint.c_str());
+                else
+                    LogError("could not save the pinned relay key for %s", endpoint.c_str());
+            }
+            established = true;
+            break;
         }
         if (!established) {
-            SendRelayStatus(fr::RelayError, "Encrypted handshake with the relay server failed");
-            LogError("relay encrypted handshake timeout");
+            if (!keyRejected)
+                SendRelayStatus(fr::RelayError, "Encrypted handshake with the relay server failed");
+            if (!keyRejected) LogError("relay encrypted handshake timeout");
             CloseRelaySocket(s);
             g_relayRunning.store(false);
             return 0;

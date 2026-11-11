@@ -99,10 +99,15 @@ passphrase `goal11`, pick your game executable, create or join a room and start 
 - build client, Hook and server from the same revision; older builds that predate the encrypted
   transport cannot connect to a current server;
 - all client/Hook <-> server traffic (room browser, room chat, relayed game packets) is encrypted:
-  an ephemeral X25519 key exchange establishes per-direction keys, and every datagram is sealed
-  with XSalsa20-Poly1305 (NaCl secretbox) and a replay window;
-- the handshake is not authenticated, so traffic is protected against passive eavesdropping but
-  not against an active man-in-the-middle on a hostile network.
+  an ephemeral X25519 key exchange combined with the server's long-term key establishes
+  per-direction keys, and every datagram is sealed with XSalsa20-Poly1305 (NaCl secretbox) and a
+  replay window;
+- the server authenticates itself with a long-term key (created on first start in the server's
+  working directory, `/var/lib/net-goal-11/server.key` under systemd) whose fingerprint is printed in the
+  server log; clients pin that key on first use (trust on first use) and refuse to connect if it
+  changes, which defeats an impostor relay except at the very first contact. Delete
+  `%LOCALAPPDATA%\Net Goal 11\pinned_servers.txt` (or its matching line) to trust a reinstalled
+  server again.
 
 ## Credits
 

@@ -4,6 +4,7 @@
 // Windows: select() fallback so the same source can be tested locally.
 #define _GNU_SOURCE 1
 #include "../common/protocol.h"
+#include "../common/pinned_keys.h"
 #include "../common/secure.h"
 #include "../common/version.h"
 
@@ -29,6 +30,7 @@
 #  include <netinet/in.h>
 #  include <sys/epoll.h>
 #  include <sys/socket.h>
+#  include <sys/stat.h>
 #  include <unistd.h>
 #endif
 
@@ -43,6 +45,7 @@ struct Options {
     uint32_t mask = 0;
     int maxPeers = 16;
     std::string bindAddress = "0.0.0.0";
+    std::string keyFile = "net-goal-11-server.key";
 };
 
 struct Session {
@@ -95,6 +98,11 @@ std::unordered_map<std::string, LobbyRoom> g_lobbyRooms;
 // Encrypted transport state, one channel per remote endpoint (both the GUI
 // lobby and the in-game hook share the same endpoint key).
 std::unordered_map<uint64_t, ngs::Channel> g_channels;
+
+// Long-term server key used to authenticate the handshake.  Clients pin the
+// matching public key on first connect (TOFU).
+uint8_t g_staticPriv[32] = {};
+uint8_t g_staticPub[32] = {};
 #ifdef _WIN32
 SOCKET g_sock = INVALID_SOCKET;
 #else
@@ -916,7 +924,8 @@ void HandlePacket(uint8_t* data, size_t size, const sockaddr_in& remote) {
         ngs::Channel& channel = g_channels[key];
         uint8_t reply[ngs::kMaxFrame];
         size_t replyLength = 0;
-        if (channel.HandleInit(data, size, reply, replyLength, NowMs())) {
+        if (channel.HandleInit(data, size, g_staticPriv, g_staticPub, reply, replyLength,
+                               NowMs())) {
             SendRaw(remote, reply, replyLength);
             printf("[secure] handshake %s\n", EndpointText(remote).c_str());
         }
@@ -1025,7 +1034,42 @@ bool OpenSocket(const Options& options) {
     return true;
 }
 
+// Loads (or creates) the long-term server key used for handshake
+// authentication.  The key is a 32-byte X25519 private key stored as a raw
+// file; clients pin the derived public key on first connect.
+bool LoadStaticKey(const std::string& path) {
+    FILE* file = fopen(path.c_str(), "rb");
+    if (file) {
+        size_t got = fread(g_staticPriv, 1, sizeof(g_staticPriv), file);
+        fclose(file);
+        if (got != sizeof(g_staticPriv)) {
+            fprintf(stderr, "[secure] key file %s must contain 32 bytes\n", path.c_str());
+            return false;
+        }
+    } else {
+        ngc::RandomBytes(g_staticPriv, sizeof(g_staticPriv));
+        FILE* out = fopen(path.c_str(), "wb");
+        if (!out) {
+            fprintf(stderr, "[secure] cannot create the key file %s\n", path.c_str());
+            return false;
+        }
+        bool ok = fwrite(g_staticPriv, 1, sizeof(g_staticPriv), out) == sizeof(g_staticPriv);
+        fclose(out);
+        if (!ok) {
+            fprintf(stderr, "[secure] cannot write the key file %s\n", path.c_str());
+            return false;
+        }
+#ifndef _WIN32
+        chmod(path.c_str(), S_IRUSR | S_IWUSR);
+#endif
+        printf("[secure] generated a new server key: %s\n", path.c_str());
+    }
+    ngc::X25519Base(g_staticPub, g_staticPriv);
+    return true;
+}
+
 int Run(const Options& options) {
+    if (!LoadStaticKey(options.keyFile)) return 1;
     if (!OpenSocket(options)) return 1;
 
 #ifndef _WIN32
@@ -1041,6 +1085,9 @@ int Run(const Options& options) {
     auto lastExpiry = Clock::now();
     printf("[start] udp/%d subnet=%s mask=%s max-peers=%d encryption=x25519+xsalsa20-poly1305\n",
            options.port, IpToString(g_subnet).c_str(), IpToString(g_mask).c_str(), g_maxPeers);
+    printf("[secure] server key %s fingerprint %s\n", options.keyFile.c_str(),
+           ngp::Fingerprint(g_staticPub).c_str());
+    printf("[secure] clients pin this key on first connect; delete the key file to rotate it\n");
     fflush(stdout);
 
     while (!g_stop) {
@@ -1123,6 +1170,7 @@ void PrintHelp() {
         "  --mask <ipv4>           default 255.255.255.0\n"
         "  --max-peers <2..16>     default 16\n"
         "  --bind <ipv4>           default 0.0.0.0\n"
+        "  --key-file <path>       default net-goal-11-server.key\n"
         "  --help\n",
         kDefaultPort);
 }
@@ -1141,6 +1189,7 @@ bool ParseOptions(int argc, char** argv, Options& options) {
         else if (arg == "--mask") { const char* v = next("--mask"); if (!v) return false; maskText = v; }
         else if (arg == "--max-peers") { const char* v = next("--max-peers"); if (!v) return false; options.maxPeers = atoi(v); }
         else if (arg == "--bind") { const char* v = next("--bind"); if (!v) return false; options.bindAddress = v; }
+        else if (arg == "--key-file") { const char* v = next("--key-file"); if (!v) return false; options.keyFile = v; }
         else if (arg == "--help" || arg == "-h") { PrintHelp(); exit(0); }
         else { fprintf(stderr, "unknown argument: %s\n", arg.c_str()); return false; }
     }

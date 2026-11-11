@@ -22,7 +22,7 @@ Net Goal 11 是一个局域网对战联机工具（原生 C++ 重写版），用
 
 ```text
 native/
-  common/protocol.h          新旧协议兼容定义 + Probe/ProbeAck + Hook IPC
+  common/protocol.h          新旧协议兼容定义 + Hook IPC
   common/game_names.h        游戏主程序/目录的混淆名称表（不要修改）
   hook/hook_direct.cpp       x86 Hook，直接连接中继服务器，虚拟 IP 伪装/流量注入
   client/client.cpp          Win32 x86 主界面，配置、探测、注入、状态
@@ -82,7 +82,7 @@ Win7 版输出到 `native/dist/client-win-x86-win7/`，压缩包为
 ## 部署 Linux VPS
 
 服务端监听一个指定的 UDP 端口（默认 `45888`，部署时可用 `--port` 修改）。
-服务端协议对原来的消息 1..9 兼容，并新增 GUI 探测消息 `Probe=10 / ProbeAck=11`。
+客户端的全部报文都走加密通道，服务端不再响应明文探测包。
 
 把 `Net Goal 11-server-linux-x64.zip` 上传到 VPS，解压后：
 
@@ -118,6 +118,16 @@ sudo ufw allow 45888/udp
 
 回滚：`/opt/net-goal-11/Net Goal 11.Server.bak.*` 是部署脚本自动保留的上一版；
 停服务后复制回去即可。
+
+服务端首次启动会生成长期密钥 `/var/lib/net-goal-11/server.key`（`--key-file` 可改路径），
+日志里会打印它的指纹，例如：
+
+```
+[secure] server key /var/lib/net-goal-11/server.key fingerprint 4D6E-8F48-C58C-0F5F-83C0-847A-2C62-76BD
+```
+
+客户端第一次连接时自动记住（TOFU 固定）这个公钥，以后指纹变化就会拒绝连接。
+备份服务器时请一并备份该文件；删除它等于更换密钥，所有客户端都需要清除本地固定记录。
 
 ## 登录（服务器 IP / 端口 + 固定口令）
 
@@ -256,7 +266,7 @@ mode=1
 ## 协议说明
 
 - 原有 `Hello/HelloAck/Data/Broadcast/PeerList/Ping/Pong/Bye/Error` 的 32 字节头和负载语义保持不变。
-- 服务端额外支持 `Probe=10`（无会话探测）和 `ProbeAck=11`（返回 subnet/mask）。
+- 服务端不再处理 `Probe=10` / `ProbeAck=11`：明文探测包会被直接丢弃。
 - 房间大厅消息（GUI 与服务端之间，不经过 Hook）：
   - `LobbyCreate=13`：房主创建房间，携带模式、房间号、密码哈希、昵称、是否已设置游戏路径；
   - `LobbyJoin=14`：客户端加入房间；
@@ -284,7 +294,15 @@ mode=1
 - 客户端/Hook 与服务器之间的所有数据（房间列表、房间聊天、转发的游戏 UDP 包）都已加密：
   先做临时 X25519 密钥交换，再用 XSalsa20-Poly1305（NaCl secretbox）逐包认证加密，
   并带重放窗口；服务器不再接受明文数据报。
-- 握手没有身份认证，能防止被动窃听，但无法防止恶意网络中的主动中间人攻击。
+- 握手已带服务器身份认证：服务器持有一对长期 X25519 密钥（Linux 下为
+  `/var/lib/net-goal-11/server.key`），会话密钥同时混合了临时 DH 与服务器长期密钥 DH，
+  只有持有该私钥的服务器才能算出应答里的确认标签。
+- 客户端首次连接时固定（pin）服务器公钥，即 TOFU；之后每次连接都核对
+  `%LOCALAPPDATA%\Net Goal 11\pinned_servers.txt` 中记录的指纹，不一致直接拒绝并提示
+  指纹和文件位置。所以第一次连接仍可能被中间人顶替（TOFU 的固有前提），
+  但之后的连接可以识破伪造/替换的服务器。
+- 想彻底避免首次连接的盲信，可以先在服务器日志里看指纹，再手动核对客户端日志里的
+  “Pinned the relay server key …” 是否一致。
 - 中继服务器能看到解密后的协议头（用于按房间/虚拟 IP 转发），但不会解析游戏负载。
 - 开源版没有授权校验，任何人都可以运行客户端并连接你部署的服务器；
   如需限制使用范围，请自行在网络层（防火墙/白名单/VPN）做访问控制。

@@ -3,8 +3,10 @@
 // Build and run with the native build script ("crypto-test" step) or manually:
 //   zig c++ -std=c++17 -o crypto_test.exe native/tests/crypto_test.cpp
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "../common/pinned_keys.h"
 #include "../common/secure.h"
 
 static int g_failures = 0;
@@ -95,6 +97,9 @@ int main() {
 
     // ---- Channel handshake + data frames ---------------------------------
     {
+        uint8_t serverPriv[32], serverPub[32];
+        ngc::X25519Keypair(serverPub, serverPriv);
+
         ngs::Channel client;
         ngs::Channel server;
         uint8_t init[ngs::kMaxFrame];
@@ -105,8 +110,12 @@ int main() {
         uint8_t reply[ngs::kMaxFrame];
         size_t replyLen = 0;
         Check("server accepts init",
-              server.HandleInit(init, initLen, reply, replyLen, 2));
-        Check("client accepts reply", client.HandleReply(reply, replyLen, 3));
+              server.HandleInit(init, initLen, serverPriv, serverPub, reply, replyLen, 2));
+        uint8_t advertised[32] = {};
+        Check("reply advertises the static key",
+              ngs::Channel::PeekReplyStatic(reply, replyLen, advertised) &&
+                  memcmp(advertised, serverPub, 32) == 0);
+        Check("client accepts reply", client.HandleReply(reply, replyLen, serverPub, 3));
 
         uint8_t plain[120], frame[ngs::kMaxFrame], out[ngs::kMaxFrame];
         ngc::RandomBytes(plain, sizeof(plain));
@@ -126,9 +135,78 @@ int main() {
         // A duplicate init must not invalidate the established keys.
         uint8_t reply2[ngs::kMaxFrame];
         size_t replyLen2 = 0;
-        server.HandleInit(init, initLen, reply2, replyLen2, 4);
+        server.HandleInit(init, initLen, serverPriv, serverPub, reply2, replyLen2, 4);
         Check("repeated init keeps the same server key",
               replyLen2 == replyLen && memcmp(reply, reply2, replyLen) == 0);
+
+        // A different pinned key must be rejected outright.
+        {
+            ngs::Channel other;
+            other.BeginClientHandshake(5);
+            size_t otherInitLen = 0;
+            uint8_t otherInit[ngs::kMaxFrame];
+            other.BuildInit(otherInit, otherInitLen);
+            uint8_t otherReply[ngs::kMaxFrame];
+            size_t otherReplyLen = 0;
+            server.HandleInit(otherInit, otherInitLen, serverPriv, serverPub, otherReply,
+                              otherReplyLen, 6);
+            uint8_t wrong[32];
+            memcpy(wrong, serverPub, 32);
+            wrong[0] ^= 1;
+            Check("client rejects a different pinned key",
+                  !other.HandleReply(otherReply, otherReplyLen, wrong, 7));
+        }
+
+        // An impostor that does not hold the pinned private key is rejected
+        // even though its own handshake is internally consistent.
+        {
+            uint8_t fakePriv[32], fakePub[32];
+            ngc::X25519Keypair(fakePub, fakePriv);
+            ngs::Channel fakeServer;
+            ngs::Channel victim;
+            victim.BeginClientHandshake(8);
+            size_t victimInitLen = 0;
+            uint8_t victimInit[ngs::kMaxFrame];
+            victim.BuildInit(victimInit, victimInitLen);
+            uint8_t fakeReply[ngs::kMaxFrame];
+            size_t fakeReplyLen = 0;
+            fakeServer.HandleInit(victimInit, victimInitLen, fakePriv, fakePub, fakeReply,
+                                  fakeReplyLen, 9);
+            Check("impostor is rejected by the pinned key",
+                  !victim.HandleReply(fakeReply, fakeReplyLen, serverPub, 10));
+        }
+    }
+
+    // ---- Pin store (trust on first use) -----------------------------------
+    {
+        char path[512];
+        const char* temp = getenv("TEMP");
+        if (!temp || !*temp) temp = ".";
+        snprintf(path, sizeof(path), "%s\\ng11_pins_test.txt", temp);
+#ifdef _WIN32
+        _putenv_s("NETGOAL11_PIN_FILE", path);
+#else
+        setenv("NETGOAL11_PIN_FILE", path, 1);
+#endif
+        remove(path);
+
+        uint8_t keyA[32], keyB[32], loaded[32];
+        ngc::RandomBytes(keyA, sizeof(keyA));
+        ngc::RandomBytes(keyB, sizeof(keyB));
+
+        Check("pin store starts empty", !ngp::LoadPin("1.2.3.4:45888", loaded));
+        Check("pin store saves", ngp::SavePin("1.2.3.4:45888", keyA));
+        Check("pin store loads",
+              ngp::LoadPin("1.2.3.4:45888", loaded) && memcmp(loaded, keyA, 32) == 0);
+        Check("pin store keeps other entries",
+              ngp::SavePin("5.6.7.8:1", keyB) && ngp::LoadPin("1.2.3.4:45888", loaded) &&
+                  memcmp(loaded, keyA, 32) == 0);
+        Check("pin store overwrites",
+              ngp::SavePin("1.2.3.4:45888", keyB) &&
+                  ngp::LoadPin("1.2.3.4:45888", loaded) && memcmp(loaded, keyB, 32) == 0);
+        std::string fingerprint = ngp::Fingerprint(keyA);
+        Check("fingerprint format", fingerprint.size() == 39 && fingerprint[4] == '-');
+        remove(path);
     }
 
     printf("\n%s (%d failure%s)\n", g_failures == 0 ? "ALL TESTS PASSED" : "TESTS FAILED",

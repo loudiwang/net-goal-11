@@ -7,7 +7,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 DynamicUser=yes
-ExecStart="/opt/net-goal-11/Net Goal 11.Server" --port 45888 --subnet 10.213.77.0 --mask 255.255.255.0 --max-peers 16
+StateDirectory=net-goal-11
+ExecStart="/opt/net-goal-11/Net Goal 11.Server" --port 45888 --subnet 10.213.77.0 --mask 255.255.255.0 --max-peers 16 --key-file /var/lib/net-goal-11/server.key
 Restart=always
 RestartSec=2
 LimitNOFILE=65535

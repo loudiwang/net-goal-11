@@ -23,6 +23,7 @@
 #include <gdiplus.h>
 
 #include "../common/protocol.h"
+#include "../common/pinned_keys.h"
 #include "../common/secure.h"
 #include "../common/game_names.h"
 #include "../common/version.h"
@@ -234,6 +235,8 @@ sockaddr_in g_lobbyServer{};
 // Every lobby datagram is encrypted with this channel (X25519 + XSalsa20-Poly1305).
 ngs::Channel g_lobbyChannel;
 std::mutex g_lobbySecureMutex;
+// Set by LobbyHandshake so StartLobbyNet can show a precise reason.
+std::wstring g_lobbySecureError;
 bool g_inLobby = false;
 bool g_lobbyIsHost = false;
 bool g_lobbyStarted = false;
@@ -1161,12 +1164,20 @@ DWORD WINAPI LobbyThread(LPVOID) {
 
 // Blocking handshake performed right before the lobby thread starts.  The
 // socket already has a 500 ms receive timeout, so this never stalls for long.
+// The server authenticates itself with its pinned long-term key (TOFU).
 bool LobbyHandshake(SOCKET s) {
     std::lock_guard<std::mutex> lock(g_lobbySecureMutex);
+    g_lobbySecureError.clear();
     g_lobbyChannel.BeginClientHandshake(GetTickCount64());
     uint8_t init[ngs::kMaxFrame];
     size_t initLength = 0;
     g_lobbyChannel.BuildInit(init, initLength);
+
+    char endpointText[64];
+    snprintf(endpointText, sizeof(endpointText), "%s:%u",
+             fr::IpToString(g_lobbyServer.sin_addr.s_addr).c_str(),
+             (unsigned)ntohs(g_lobbyServer.sin_port));
+    const std::string endpoint = endpointText;
 
     ULONGLONG deadline = GetTickCount64() + 3000;
     ULONGLONG nextSend = 0;
@@ -1182,7 +1193,33 @@ bool LobbyHandshake(SOCKET s) {
         if (received < (int)ngs::kHeaderSize) continue;
         if (!ngs::IsSecureFrame(buffer, (size_t)received)) continue;
         if (buffer[5] != ngs::FrameReply) continue;
-        if (g_lobbyChannel.HandleReply(buffer, (size_t)received, GetTickCount64())) return true;
+
+        uint8_t serverKey[32] = {};
+        if (!ngs::Channel::PeekReplyStatic(buffer, (size_t)received, serverKey)) continue;
+
+        uint8_t pinned[32] = {};
+        bool known = ngp::LoadPin(endpoint, pinned);
+        if (known && !ngc::ConstantTimeEqual(pinned, serverKey, 32)) {
+            g_lobbySecureError =
+                L"The relay server encryption key changed. Pinned " +
+                Utf8ToWide(ngp::Fingerprint(pinned)) + L", received " +
+                Utf8ToWide(ngp::Fingerprint(serverKey)) + L". Delete " +
+                Utf8ToWide(ngp::StorePath()) + L" if the server was reinstalled.";
+            return false;
+        }
+
+        if (!g_lobbyChannel.HandleReply(buffer, (size_t)received, serverKey, GetTickCount64()))
+            continue;
+
+        if (!known) {
+            if (ngp::SavePin(endpoint, serverKey))
+                AppendLog(L"Pinned the relay server key " +
+                          Utf8ToWide(ngp::Fingerprint(serverKey)) + L" for " +
+                          Utf8ToWide(endpoint) + L".");
+            else
+                AppendLog(L"Warning: the pinned server key could not be saved.");
+        }
+        return true;
     }
     return false;
 }
@@ -1224,7 +1261,9 @@ bool StartLobbyNet(const std::wstring& server, int port) {
         closesocket(s);
         g_lobbySocket = INVALID_SOCKET;
         memset(&g_lobbyServer, 0, sizeof(g_lobbyServer));
-        AppendLog(L"The encrypted handshake with the server failed.");
+        AppendLog(g_lobbySecureError.empty()
+                      ? std::wstring(L"The encrypted handshake with the server failed.")
+                      : g_lobbySecureError);
         return false;
     }
 
