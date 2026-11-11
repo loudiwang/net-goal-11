@@ -15,34 +15,18 @@
 #include <unistd.h>
 #endif
 
+#include "secure_test_peer.h"
+
 static int g_fail = 0;
 #define CHECK(x) do { if (!(x)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); ++g_fail; } } while (0)
 
-struct Peer {
-    SOCKET s = INVALID_SOCKET;
-    sockaddr_in server{};
-};
+using Peer = SecureTestPeer;
 
 static bool OpenPeer(Peer& peer, int port) {
-#ifdef _WIN32
-    WSADATA wsa{};
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-#endif
-    peer.s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (peer.s == INVALID_SOCKET) return false;
-#ifdef _WIN32
-    DWORD timeout = 1500;
-#else
-    timeval timeout{1, 500000};
-#endif
-    setsockopt(peer.s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-    peer.server.sin_family = AF_INET;
-    peer.server.sin_port = htons((unsigned short)port);
-    inet_pton(AF_INET, "127.0.0.1", &peer.server.sin_addr);
-    return true;
+    return peer.Open("127.0.0.1", port);
 }
 
-static bool SendLobby(const Peer& peer, fr::MessageType type, uint8_t mode,
+static bool SendLobby(Peer& peer, fr::MessageType type, uint8_t mode,
                       bool hasGame, uint64_t hash, const char* room,
                       const char* name) {
     uint8_t payload[fr::kMaxPayload] = {};
@@ -50,20 +34,16 @@ static bool SendLobby(const Peer& peer, fr::MessageType type, uint8_t mode,
     uint8_t packet[fr::kHeaderSize + fr::kMaxPayload] = {};
     if (!fr::EncodeHeader(packet, type, 0, 0, 0, 0, 0, (uint16_t)len)) return false;
     memcpy(packet + fr::kHeaderSize, payload, len);
-    int sent = sendto(peer.s, (const char*)packet, (int)(fr::kHeaderSize + len), 0,
-                      (const sockaddr*)&peer.server, sizeof(peer.server));
-    return sent == (int)(fr::kHeaderSize + len);
+    return peer.Send(packet, fr::kHeaderSize + len);
 }
 
-static bool SendStart(const Peer& peer) {
+static bool SendStart(Peer& peer) {
     fr::LobbyStartPayload payload{};
     payload.mode = 1;
     uint8_t packet[fr::kHeaderSize + sizeof(payload)] = {};
     if (!fr::EncodeHeader(packet, fr::LobbyStart, 0, 0, 0, 0, 0, sizeof(payload))) return false;
     memcpy(packet + fr::kHeaderSize, &payload, sizeof(payload));
-    int sent = sendto(peer.s, (const char*)packet, (int)sizeof(packet), 0,
-                      (const sockaddr*)&peer.server, sizeof(peer.server));
-    return sent == (int)sizeof(packet);
+    return peer.Send(packet, sizeof(packet));
 }
 
 struct State {
@@ -76,32 +56,42 @@ struct State {
     uint8_t flags[fr::kMaxPeers] = {};
 };
 
-static State Receive(const Peer& peer) {
-    State state;
-    uint8_t buffer[2048];
-    sockaddr_in from{};
-    int fromLen = sizeof(from);
-    int received = recvfrom(peer.s, (char*)buffer, sizeof(buffer), 0,
-                            (sockaddr*)&from, &fromLen);
-    if (received < (int)fr::kHeaderSize) return state;
-    fr::RelayHeader header{};
-    if (!fr::DecodeHeader(buffer, (size_t)received, header)) return state;
-    state.type = header.type;
-    if (header.type == fr::LobbyState) {
-        CHECK(fr::DecodeLobbyState(buffer + fr::kHeaderSize, header.length, state.mode,
-                                   state.selfHost, state.room, state.names,
-                                   state.flags, state.count));
-    } else {
-        state.count = header.length;
+static State Receive(Peer& peer) {
+    for (;;) {
+        State state;
+        uint8_t buffer[2048];
+        int received = peer.Receive(buffer, sizeof(buffer));
+        if (received < (int)fr::kHeaderSize) return state;
+        fr::RelayHeader header{};
+        if (!fr::DecodeHeader(buffer, (size_t)received, header)) return state;
+        state.type = header.type;
+        if (header.type == fr::LobbyState) {
+            CHECK(fr::DecodeLobbyState(buffer + fr::kHeaderSize, header.length, state.mode,
+                                       state.selfHost, state.room, state.names,
+                                       state.flags, state.count));
+        } else {
+            state.count = header.length;
+        }
+        // Room chat notifications are not part of the sequencing checked here.
+        if (state.type == fr::LobbyChatMessage) continue;
+        return state;
     }
-    return state;
 }
 
-static void Drain(const Peer& peer) {
+// Reads messages until one of the wanted type arrives (skipping chat/state
+// notifications that are pushed asynchronously by the server).
+static State ReceiveUntil(Peer& peer, uint8_t wanted) {
+    for (int i = 0; i < 8; ++i) {
+        State state = Receive(peer);
+        if (state.type == 0) return state;
+        if (state.type == wanted) return state;
+    }
+    return State{};
+}
+
+static void Drain(Peer& peer) {
     uint8_t buffer[2048];
-    for (;;) {
-        int received = recvfrom(peer.s, (char*)buffer, sizeof(buffer), 0, nullptr, nullptr);
-        if (received == SOCKET_ERROR) break;
+    while (peer.Receive(buffer, sizeof(buffer)) >= 0) {
     }
 }
 
@@ -137,8 +127,8 @@ int main(int argc, char** argv) {
 
     // Host start must reach both GUI clients.
     CHECK(SendStart(host));
-    State startHost = Receive(host);
-    State startGuest = Receive(guest);
+    State startHost = ReceiveUntil(host, fr::LobbyStart);
+    State startGuest = ReceiveUntil(guest, fr::LobbyStart);
     CHECK(startHost.type == fr::LobbyStart);
     CHECK(startGuest.type == fr::LobbyStart);
 
@@ -149,14 +139,14 @@ int main(int argc, char** argv) {
 
     // A new room with a guest that has no game path must be rejected at start.
     CHECK(SendLobby(host, fr::LobbyCreate, 1, true, 0x3333, "TESTLOBBY2", "Host2"));
-    State s2 = Receive(host);
+    State s2 = ReceiveUntil(host, fr::LobbyState);
     CHECK(s2.type == fr::LobbyState);
     Drain(guest);  // "host left the old room"
     CHECK(SendLobby(guest, fr::LobbyJoin, 0, false, 0x3333, "TESTLOBBY2", "Guest2"));
     CHECK(Receive(guest).type == fr::LobbyState);
     CHECK(Receive(host).type == fr::LobbyState);
     CHECK(SendStart(host));
-    State blocked = Receive(host);
+    State blocked = ReceiveUntil(host, fr::Error);
     CHECK(blocked.type == fr::Error);
 
     printf(g_fail ? "lobby_test: %d failure(s)\n" : "lobby_test: all checks passed\n", g_fail);

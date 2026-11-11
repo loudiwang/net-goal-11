@@ -2,9 +2,13 @@
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File .\native\build\build_all.ps1
 #   powershell -ExecutionPolicy Bypass -File .\native\build\build_all.ps1 -Zig "C:\path\to\zig.exe"
+#   powershell -ExecutionPolicy Bypass -File .\native\build\build_all.ps1 -Tests
+#     (also builds the transport test clients in native/dist/tests and runs the
+#      crypto self-test)
 param(
     [string]$Zig = $env:ZIG,
-    [string]$Win7Gcc = $env:WIN7_GCC
+    [string]$Win7Gcc = $env:WIN7_GCC,
+    [switch]$Tests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -183,6 +187,35 @@ $serverWinFiles = @(
 $serverWinZip = Join-Path $dist 'Net Goal 11-server-win-x64.zip'
 if (Test-Path $serverWinZip) { Remove-Item $serverWinZip -Force }
 Compress-Archive -Path $serverWinFiles -DestinationPath $serverWinZip -Force
+
+# ---------------------------------------------------------------------------
+# Optional transport tests (crypto vectors + encrypted relay/lobby clients).
+# ---------------------------------------------------------------------------
+if ($Tests) {
+    $testOut = Join-Path $dist 'tests'
+    New-Item -ItemType Directory -Force -Path $testOut | Out-Null
+    Write-Host 'Building transport tests (x64)...'
+    Invoke-Zig @(
+        'c++', '-target', 'x86_64-windows-gnu', '-O2', '-std=c++17',
+        '-o', (Join-Path $testOut 'crypto_test.exe'),
+        (Join-Path $native 'tests\crypto_test.cpp')
+    )
+    Invoke-Zig @(
+        'c++', '-target', 'x86_64-windows-gnu', '-O2', '-std=c++17',
+        '-o', (Join-Path $testOut 'secure_relay_test.exe'),
+        (Join-Path $native 'tests\secure_relay_test.cpp'), '-lws2_32'
+    )
+    foreach ($name in @('lobby_test', 'lobby_list_test', 'lobby_peer')) {
+        Invoke-Zig @(
+            'c++', '-target', 'x86_64-windows-gnu', '-O2', '-std=c++17',
+            '-o', (Join-Path $testOut ($name + '.exe')),
+            (Join-Path $native ('tests\' + $name + '.cpp')), '-lws2_32'
+        )
+    }
+    Write-Host 'Running crypto self-test...'
+    & (Join-Path $testOut 'crypto_test.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'crypto self-test failed' }
+}
 
 # ---------------------------------------------------------------------------
 # Optional Windows 7 build.

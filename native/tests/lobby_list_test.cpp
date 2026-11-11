@@ -8,42 +8,35 @@
 #include <cstring>
 #include <string>
 #include "../common/protocol.h"
+#include "secure_test_peer.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
 using namespace fr;
+using Peer = SecureTestPeer;
 
-static sockaddr_in g_server{};
+static int g_port = 45888;
 static int g_failures = 0;
 
-static SOCKET OpenPeer(uint16_t& port) {
-    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = 0;
-    bind(s, (sockaddr*)&addr, sizeof(addr));
-    int len = sizeof(addr);
-    getsockname(s, (sockaddr*)&addr, &len);
-    port = ntohs(addr.sin_port);
-    DWORD timeout = 1500;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-    return s;
+static Peer OpenPeer() {
+    Peer peer;
+    if (!peer.Open("127.0.0.1", g_port)) {
+        printf("[FAIL] encrypted handshake\n");
+        ++g_failures;
+    }
+    return peer;
 }
 
-static bool Send(SOCKET s, MessageType type, const void* payload, uint16_t length) {
+static bool Send(Peer& peer, MessageType type, const void* payload, uint16_t length) {
     uint8_t buffer[kMaxDatagram];
     if (!EncodeHeader(buffer, type, 0, 0, 0, 0, 0, length)) return false;
     if (length) memcpy(buffer + kHeaderSize, payload, length);
-    return sendto(s, (const char*)buffer, kHeaderSize + length, 0,
-                  (const sockaddr*)&g_server, sizeof(g_server)) == (int)(kHeaderSize + length);
+    return peer.Send(buffer, kHeaderSize + length);
 }
 
-static bool Receive(SOCKET s, MessageType& type, uint8_t* payload, size_t& length) {
+static bool Receive(Peer& peer, MessageType& type, uint8_t* payload, size_t& length) {
     uint8_t buffer[kMaxDatagram];
-    sockaddr_in from{};
-    int fromLen = sizeof(from);
-    int received = recvfrom(s, (char*)buffer, sizeof(buffer), 0, (sockaddr*)&from, &fromLen);
+    int received = peer.Receive(buffer, sizeof(buffer));
     if (received < (int)kHeaderSize) return false;
     RelayHeader header{};
     if (!DecodeHeader(buffer, (size_t)received, header)) return false;
@@ -53,10 +46,10 @@ static bool Receive(SOCKET s, MessageType& type, uint8_t* payload, size_t& lengt
     return true;
 }
 
-static bool WaitFor(SOCKET s, MessageType wanted, uint8_t* payload, size_t& length) {
+static bool WaitFor(Peer& peer, MessageType wanted, uint8_t* payload, size_t& length) {
     for (int i = 0; i < 8; ++i) {
         MessageType type;
-        if (!Receive(s, type, payload, length)) return false;
+        if (!Receive(peer, type, payload, length)) return false;
         if (type == wanted) return true;
     }
     return false;
@@ -67,19 +60,19 @@ static void Check(bool ok, const char* what) {
     if (!ok) ++g_failures;
 }
 
-static void SendRequest(SOCKET s, MessageType type, uint8_t mode, const char* room,
+static void SendRequest(Peer& peer, MessageType type, uint8_t mode, const char* room,
                         const char* name, const char* password) {
     fr::LobbyRequestPayload request{};
     EncodeLobbyRequest((uint8_t*)&request, mode, true, PasswordHash(password),
                        room, name);
-    Send(s, type, &request, sizeof(request));
+    Send(peer, type, &request, sizeof(request));
 }
 
-static bool Browse(SOCKET s, LobbyListPayload& out) {
-    if (!Send(s, MessageType::LobbyBrowse, nullptr, 0)) return false;
+static bool Browse(Peer& peer, LobbyListPayload& out) {
+    if (!Send(peer, MessageType::LobbyBrowse, nullptr, 0)) return false;
     uint8_t payload[1400];
     size_t length = 0;
-    if (!WaitFor(s, MessageType::LobbyList, payload, length)) return false;
+    if (!WaitFor(peer, MessageType::LobbyList, payload, length)) return false;
     if (length < sizeof(LobbyListPayload)) return false;
     memcpy(&out, payload, sizeof(out));
     return true;
@@ -93,16 +86,12 @@ static const LobbyListEntry* FindRoom(const LobbyListPayload& list, const char* 
 }
 
 int main(int argc, char** argv) {
-    int port = argc > 1 ? atoi(argv[1]) : 45888;
+    g_port = argc > 1 ? atoi(argv[1]) : 45888;
     WSADATA wsa{};
     WSAStartup(MAKEWORD(2, 2), &wsa);
-    g_server.sin_family = AF_INET;
-    g_server.sin_port = htons((uint16_t)port);
-    inet_pton(AF_INET, "127.0.0.1", &g_server.sin_addr);
 
-    uint16_t hostPort = 0, guestPort = 0;
-    SOCKET host = OpenPeer(hostPort);
-    SOCKET guest = OpenPeer(guestPort);
+    Peer host = OpenPeer();
+    Peer guest = OpenPeer();
     uint8_t payload[1400];
     size_t length = 0;
 
@@ -120,8 +109,7 @@ int main(int argc, char** argv) {
     }
 
     // 5v5 rooms must advertise a capacity of 10 players.
-    uint16_t fivePort = 0;
-    SOCKET five = OpenPeer(fivePort);
+    Peer five = OpenPeer();
     SendRequest(five, MessageType::LobbyCreate, 5, "FIVE55", "HostFive", "");
     Check(WaitFor(five, MessageType::LobbyState, payload, length), "5v5 room created");
     Browse(guest, list);
@@ -129,7 +117,7 @@ int main(int argc, char** argv) {
     Check(entry && entry->mode == 5 && entry->capacity == 10,
           "5v5 room list shows capacity 10");
     Send(five, MessageType::LobbyLeave, nullptr, 0);
-    closesocket(five);
+    five.Close();
 
     SendRequest(guest, MessageType::LobbyJoin, 0, "BROWSE1", "GuestB", "");
     Check(WaitFor(guest, MessageType::LobbyState, payload, length), "guest receives LobbyState after join");
@@ -173,7 +161,7 @@ int main(int argc, char** argv) {
     Check(WaitFor(guest, MessageType::Error, payload, length), "kicked guest receives Error");
     if (length) {
         std::string text((const char*)payload, length);
-        Check(text.find("Kick from room") != std::string::npos, "kick error text mentions removal");
+        Check(text.find("removed from the room") != std::string::npos, "kick error text mentions removal");
     }
     Check(WaitFor(host, MessageType::LobbyState, payload, length), "host gets state after kick");
     Browse(guest, list);
@@ -192,8 +180,8 @@ int main(int argc, char** argv) {
     Check(WaitFor(guest, MessageType::LobbyStart, payload, length), "guest receives LobbyStart");
 
     Send(host, MessageType::LobbyLeave, nullptr, 0);
-    closesocket(host);
-    closesocket(guest);
+    host.Close();
+    guest.Close();
     WSACleanup();
     printf("\n%s\n", g_failures == 0 ? "ALL TESTS PASSED" : "SOME TESTS FAILED");
     return g_failures == 0 ? 0 : 1;

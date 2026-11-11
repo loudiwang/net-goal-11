@@ -96,9 +96,13 @@ passphrase `goal11`, pick your game executable, create or join a room and start 
 ## Compatibility
 
 - client and Hook must be x86 - the FIFA 11 executable is 32-bit;
-- build client, Hook and server from the same revision;
-- the protocol is not encrypted (room passwords are only hashed), so do not send sensitive
-  data over untrusted networks.
+- build client, Hook and server from the same revision; older builds that predate the encrypted
+  transport cannot connect to a current server;
+- all client/Hook <-> server traffic (room browser, room chat, relayed game packets) is encrypted:
+  an ephemeral X25519 key exchange establishes per-direction keys, and every datagram is sealed
+  with XSalsa20-Poly1305 (NaCl secretbox) and a replay window;
+- the handshake is not authenticated, so traffic is protected against passive eavesdropping but
+  not against an active man-in-the-middle on a hostile network.
 
 ## Credits
 

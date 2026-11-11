@@ -4,6 +4,7 @@
 // Windows: select() fallback so the same source can be tested locally.
 #define _GNU_SOURCE 1
 #include "../common/protocol.h"
+#include "../common/secure.h"
 #include "../common/version.h"
 
 #include <algorithm>
@@ -91,6 +92,9 @@ std::unordered_map<uint64_t, std::unique_ptr<Session>> g_sessions;
 std::unordered_map<std::string, Room> g_rooms;
 std::unordered_map<uint64_t, LobbyClient> g_lobbyClients;
 std::unordered_map<std::string, LobbyRoom> g_lobbyRooms;
+// Encrypted transport state, one channel per remote endpoint (both the GUI
+// lobby and the in-game hook share the same endpoint key).
+std::unordered_map<uint64_t, ngs::Channel> g_channels;
 #ifdef _WIN32
 SOCKET g_sock = INVALID_SOCKET;
 #else
@@ -209,13 +213,29 @@ uint32_t AllocateVirtualIp(const Room& room) {
     return 0;
 }
 
-void SendTo(const sockaddr_in& remote, const uint8_t* data, size_t length) {
+void SendRaw(const sockaddr_in& remote, const uint8_t* data, size_t length) {
 #ifdef _WIN32
     sendto(g_sock, reinterpret_cast<const char*>(data), static_cast<int>(length), 0,
            reinterpret_cast<const sockaddr*>(&remote), sizeof(remote));
 #else
     sendto(g_sock, data, length, 0, reinterpret_cast<const sockaddr*>(&remote), sizeof(remote));
 #endif
+}
+
+uint64_t NowMs() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     Clock::now().time_since_epoch())
+                                     .count());
+}
+
+// Every datagram sent to a client is encrypted with that endpoint's channel.
+void SendTo(const sockaddr_in& remote, const uint8_t* data, size_t length) {
+    auto it = g_channels.find(EndpointKey(remote));
+    if (it == g_channels.end() || !it->second.ready) return;
+    uint8_t frame[ngs::kMaxFrame];
+    size_t frameLength = 0;
+    if (!it->second.Seal(data, length, frame, frameLength)) return;
+    SendRaw(remote, frame, frameLength);
 }
 
 void SendMessage(const sockaddr_in& remote, MessageType type, uint64_t token,
@@ -837,14 +857,7 @@ void HandleChat(const uint8_t* data, const RelayHeader& header, const sockaddr_i
     printf("[chat] %s room=%s bytes=%zu\n", from.name.c_str(), from.room.c_str(), text.size());
 }
 
-void HandleProbe(const sockaddr_in& remote) {
-    uint8_t payload[8];
-    Write32(payload, g_subnet);
-    Write32(payload + 4, g_mask);
-    SendMessage(remote, MessageType::ProbeAck, 0, 0, 0, 0, 0, payload, sizeof(payload));
-}
-
-void HandlePacket(uint8_t* data, size_t size, const sockaddr_in& remote) {
+void HandlePlainPacket(uint8_t* data, size_t size, const sockaddr_in& remote) {
     RelayHeader header{};
     if (!DecodeHeader(data, size, header)) {
         printf("[drop] %s bad header\n", EndpointText(remote).c_str());
@@ -875,7 +888,6 @@ void HandlePacket(uint8_t* data, size_t size, const sockaddr_in& remote) {
                 RemoveSession(it->first, "bye");
             break;
         }
-        case MessageType::Probe: HandleProbe(remote); break;
         case MessageType::LobbyCreate: HandleLobbyCreate(data, remote, header); break;
         case MessageType::LobbyJoin: HandleLobbyJoin(data, remote, header); break;
         case MessageType::LobbyLeave: HandleLobbyLeave(remote); break;
@@ -888,6 +900,40 @@ void HandlePacket(uint8_t* data, size_t size, const sockaddr_in& remote) {
     }
 }
 
+// Transport layer: every client/hook connection starts with an X25519
+// handshake and then carries only authenticated ciphertext.
+void HandlePacket(uint8_t* data, size_t size, const sockaddr_in& remote) {
+    if (!ngs::IsSecureFrame(data, size)) {
+        printf("[drop] %s unencrypted datagram\n", EndpointText(remote).c_str());
+        return;
+    }
+    if (data[4] != ngs::kVersion) return;
+
+    const uint64_t key = EndpointKey(remote);
+    const uint8_t frameType = data[5];
+
+    if (frameType == ngs::FrameInit) {
+        ngs::Channel& channel = g_channels[key];
+        uint8_t reply[ngs::kMaxFrame];
+        size_t replyLength = 0;
+        if (channel.HandleInit(data, size, reply, replyLength, NowMs())) {
+            SendRaw(remote, reply, replyLength);
+            printf("[secure] handshake %s\n", EndpointText(remote).c_str());
+        }
+        return;
+    }
+
+    auto it = g_channels.find(key);
+    if (it == g_channels.end() || !it->second.ready) return;
+    if (frameType != ngs::FrameData) return;
+
+    uint8_t plain[ngs::kMaxPlain];
+    size_t plainLength = 0;
+    if (!it->second.Open(data, size, plain, plainLength)) return;
+    it->second.lastSeenMs = NowMs();
+    HandlePlainPacket(plain, plainLength, remote);
+}
+
 void ExpireSessions() {
     auto cutoff = Clock::now() - std::chrono::seconds(60);
     std::vector<uint64_t> expired;
@@ -895,6 +941,15 @@ void ExpireSessions() {
         if (entry.second->lastSeen < cutoff) expired.push_back(entry.first);
     }
     for (uint64_t key : expired) RemoveSession(key, "timeout");
+
+    // Drop encrypted transport state that has been idle for two minutes.
+    uint64_t nowMs = NowMs();
+    for (auto it = g_channels.begin(); it != g_channels.end();) {
+        if (it->second.lastSeenMs == 0 || nowMs - it->second.lastSeenMs > 120000)
+            it = g_channels.erase(it);
+        else
+            ++it;
+    }
 }
 
 void ExpireLobbies() {
@@ -982,9 +1037,9 @@ int Run(const Options& options) {
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, g_sock, &ev) != 0) { perror("epoll_ctl"); return 1; }
 #endif
 
-    uint8_t buffer[kMaxDatagram];
+    uint8_t buffer[ngs::kMaxFrame];
     auto lastExpiry = Clock::now();
-    printf("[start] udp/%d subnet=%s mask=%s max-peers=%d\n",
+    printf("[start] udp/%d subnet=%s mask=%s max-peers=%d encryption=x25519+xsalsa20-poly1305\n",
            options.port, IpToString(g_subnet).c_str(), IpToString(g_mask).c_str(), g_maxPeers);
     fflush(stdout);
 

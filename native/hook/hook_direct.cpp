@@ -25,10 +25,7 @@
 #include <chrono>
 #include <algorithm>
 #include "../common/protocol.h"
-#include <thread>
-#include <chrono>
-#include <algorithm>
-#include "../common/protocol.h"
+#include "../common/secure.h"
 
 #ifndef SIO_ROUTING_INTERFACE_QUERY
 #define SIO_ROUTING_INTERFACE_QUERY 0xC8000014
@@ -277,6 +274,25 @@ static std::atomic<uint64_t> g_downPackets{0};
 static std::atomic<uint64_t> g_upBytes{0};
 static std::atomic<uint64_t> g_downBytes{0};
 
+// Encrypted transport to the relay server (X25519 + XSalsa20-Poly1305).
+static ngs::Channel g_relayChannel;
+static std::mutex g_relaySecureMutex;
+
+// Encrypt one plaintext protocol datagram and send it on the relay socket.
+// Returns false when the secure channel is not established yet.
+static bool RelaySendSecure(SOCKET s, const uint8_t* plain, size_t length)
+{
+    if (s == INVALID_SOCKET || !plain) return false;
+    uint8_t frame[ngs::kMaxFrame];
+    size_t frameLength = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_relaySecureMutex);
+        if (!g_relayChannel.ready) return false;
+        if (!g_relayChannel.Seal(plain, length, frame, frameLength)) return false;
+    }
+    return send(s, (const char*)frame, (int)frameLength, 0) == (int)frameLength;
+}
+
 static void SendRelayStatus(fr::RelayState state, const char* text)
 {
     fr::IpcStatusPayload payload{};
@@ -314,8 +330,7 @@ static bool RelaySendData(uint32_t dstVirt, uint16_t srcPort, uint16_t dstPort,
                           0, dstVirt, srcPort, dstPort, length))
         return false;
     memcpy(packet + fr::kHeaderSize, payload, length);
-    int sent = send(g_relaySocket, (const char*)packet, (int)(fr::kHeaderSize + length), 0);
-    return sent == (int)(fr::kHeaderSize + length);
+    return RelaySendSecure(g_relaySocket, packet, fr::kHeaderSize + length);
 }
 
 static bool RelaySendBroadcast(uint16_t srcPort, const uint8_t* payload, uint16_t length)
@@ -328,8 +343,7 @@ static bool RelaySendBroadcast(uint16_t srcPort, const uint8_t* payload, uint16_
                           0, 0, srcPort, fr::kDiscoveryPort, length))
         return false;
     memcpy(packet + fr::kHeaderSize, payload, length);
-    int sent = send(g_relaySocket, (const char*)packet, (int)(fr::kHeaderSize + length), 0);
-    return sent == (int)(fr::kHeaderSize + length);
+    return RelaySendSecure(g_relaySocket, packet, fr::kHeaderSize + length);
 }
 
 static bool RelaySendPing()
@@ -341,7 +355,7 @@ static bool RelaySendPing()
     if (!fr::EncodeHeader(packet, fr::MessageType::Ping, g_relayToken.load(std::memory_order_relaxed),
                           0, 0, 0, 0, 0))
         return false;
-    return send(g_relaySocket, (const char*)packet, sizeof(packet), 0) == (int)sizeof(packet);
+    return RelaySendSecure(g_relaySocket, packet, sizeof(packet));
 }
 
 static bool RelaySendChat(const std::string& text)
@@ -356,9 +370,7 @@ static bool RelaySendChat(const std::string& text)
                           0, 0, 0, 0, (uint16_t)text.size()))
         return false;
     memcpy(packet + fr::kHeaderSize, text.data(), text.size());
-    int sent = send(g_relaySocket, (const char*)packet,
-                    (int)(fr::kHeaderSize + text.size()), 0);
-    return sent == (int)(fr::kHeaderSize + text.size());
+    return RelaySendSecure(g_relaySocket, packet, fr::kHeaderSize + text.size());
 }
 
 static bool ResolveServer(sockaddr_in& address)
@@ -446,6 +458,55 @@ static DWORD WINAPI RelayThread(LPVOID)
     LogInfo("relay connecting to %s:%d local=%s", g_cfg.serverHost.c_str(), g_cfg.serverPort,
             IpToString(g_cfg.localIp).c_str());
 
+    // Encrypted transport: exchange ephemeral X25519 keys with the relay.  The
+    // server answers only to a valid handshake, so a failed handshake means the
+    // relay is unreachable or running an incompatible version.
+    {
+        std::lock_guard<std::mutex> lock(g_relaySecureMutex);
+        g_relayChannel.BeginClientHandshake(GetTickCount64());
+    }
+    {
+        uint8_t init[ngs::kMaxFrame];
+        size_t initLength = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_relaySecureMutex);
+            g_relayChannel.BuildInit(init, initLength);
+        }
+        bool established = false;
+        ULONGLONG deadline = GetTickCount64() + 3000;
+        ULONGLONG nextSend = 0;
+        while (g_relayRunning.load(std::memory_order_relaxed) && GetTickCount64() < deadline) {
+            if (GetTickCount64() >= nextSend) {
+                send(s, (const char*)init, (int)initLength, 0);
+                nextSend = GetTickCount64() + 400;
+            }
+            fd_set readSet;
+            FD_ZERO(&readSet);
+            FD_SET(s, &readSet);
+            timeval timeout{0, 200000};
+            int ready = select(0, &readSet, nullptr, nullptr, &timeout);
+            if (ready <= 0) continue;
+            uint8_t buffer[ngs::kMaxFrame];
+            int received = recv(s, (char*)buffer, sizeof(buffer), 0);
+            if (received <= 0) continue;
+            if (!ngs::IsSecureFrame(buffer, (size_t)received)) continue;
+            if (buffer[5] != ngs::FrameReply) continue;
+            std::lock_guard<std::mutex> lock(g_relaySecureMutex);
+            if (g_relayChannel.HandleReply(buffer, (size_t)received, GetTickCount64())) {
+                established = true;
+                break;
+            }
+        }
+        if (!established) {
+            SendRelayStatus(fr::RelayError, "Encrypted handshake with the relay server failed");
+            LogError("relay encrypted handshake timeout");
+            CloseRelaySocket(s);
+            g_relayRunning.store(false);
+            return 0;
+        }
+    }
+    LogInfo("relay encrypted channel established");
+
     uint8_t helloPayload[fr::kRoomLength + 8 + fr::kNameLength];
     size_t helloLength = fr::EncodeHello(helloPayload, g_cfg.room.c_str(), g_cfg.passwordHash, g_cfg.name);
     uint8_t helloPacket[fr::kHeaderSize + sizeof(helloPayload)];
@@ -473,7 +534,7 @@ static DWORD WINAPI RelayThread(LPVOID)
                 break;
             }
             ++helloAttempts;
-            if (send(s, (const char*)helloPacket, (int)(fr::kHeaderSize + helloLength), 0) < 0)
+            if (!RelaySendSecure(s, helloPacket, fr::kHeaderSize + helloLength))
             {
                 LogError("relay hello send failed: %d", WSAGetLastError());
                 break;
@@ -496,7 +557,7 @@ static DWORD WINAPI RelayThread(LPVOID)
 
         if (ready > 0)
         {
-            uint8_t buffer[fr::kMaxDatagram];
+            uint8_t buffer[ngs::kMaxFrame];
             int received = recv(s, (char*)buffer, sizeof(buffer), 0);
             if (received < 0)
             {
@@ -507,9 +568,16 @@ static DWORD WINAPI RelayThread(LPVOID)
                 break;
             }
 
+            uint8_t plain[ngs::kMaxPlain];
+            size_t plainLength = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_relaySecureMutex);
+                if (!g_relayChannel.Open(buffer, (size_t)received, plain, plainLength)) continue;
+            }
+
             fr::RelayHeader header{};
-            if (received >= (int)fr::kHeaderSize &&
-                fr::DecodeHeader(buffer, (size_t)received, header))
+            if (plainLength >= fr::kHeaderSize &&
+                fr::DecodeHeader(plain, plainLength, header))
             {
                 uint64_t token = g_relayToken.load(std::memory_order_relaxed);
                 switch (header.type)
@@ -521,7 +589,7 @@ static DWORD WINAPI RelayThread(LPVOID)
                     uint32_t ips[fr::kMaxPeers] = {};
                     std::string names[fr::kMaxPeers];
                     int count = 0;
-                    if (!fr::DecodeHelloAck(buffer + fr::kHeaderSize, header.length, subnet, mask,
+                    if (!fr::DecodeHelloAck(plain + fr::kHeaderSize, header.length, subnet, mask,
                                             room, ips, names, count))
                     {
                         SendRelayStatus(fr::RelayError, "The server returned an invalid HelloAck");
@@ -547,20 +615,20 @@ static DWORD WINAPI RelayThread(LPVOID)
                              IpToString(g_cfg.selfVirt).c_str());
                     SendRelayStatus(fr::RelayConnected, status);
                     uint16_t peerLength = (uint16_t)(header.length - (8 + fr::kRoomLength));
-                    SendRelayPeers(buffer + fr::kHeaderSize + 8 + fr::kRoomLength, peerLength);
+                    SendRelayPeers(plain + fr::kHeaderSize + 8 + fr::kRoomLength, peerLength);
                     uint32_t self = g_cfg.selfVirt;
                     SendIpc(IpcRelayReady, 0, 0, 0, 0, &self, sizeof(self));
                     break;
                 }
                 case fr::MessageType::PeerList:
                     if (header.token == token)
-                        SendRelayPeers(buffer + fr::kHeaderSize, header.length);
+                        SendRelayPeers(plain + fr::kHeaderSize, header.length);
                     break;
                 case fr::MessageType::Data:
                     if (header.token == token && header.length > 0)
                     {
                         InjectPayload(KindData, header.srcVirt, header.srcPort, header.dstPort,
-                                      buffer + fr::kHeaderSize, header.length);
+                                      plain + fr::kHeaderSize, header.length);
                         g_downPackets.fetch_add(1, std::memory_order_relaxed);
                         g_downBytes.fetch_add(header.length, std::memory_order_relaxed);
                     }
@@ -569,21 +637,21 @@ static DWORD WINAPI RelayThread(LPVOID)
                     if (header.token == token && header.length > 0)
                     {
                         InjectPayload(KindBroadcast, header.srcVirt, header.srcPort, fr::kDiscoveryPort,
-                                      buffer + fr::kHeaderSize, header.length);
+                                      plain + fr::kHeaderSize, header.length);
                         g_downPackets.fetch_add(1, std::memory_order_relaxed);
                         g_downBytes.fetch_add(header.length, std::memory_order_relaxed);
                     }
                     break;
                 case fr::MessageType::Chat:
                     if (header.token == token && header.length > 0)
-                        SendIpc(IpcChat, 0, 0, 0, 0, buffer + fr::kHeaderSize, header.length);
+                        SendIpc(IpcChat, 0, 0, 0, 0, plain + fr::kHeaderSize, header.length);
                     break;
                 case fr::MessageType::Pong:
                     if (header.token == token) lastPong = now;
                     break;
                 case fr::MessageType::Error:
                 {
-                    std::string text((const char*)buffer + fr::kHeaderSize, header.length);
+                    std::string text((const char*)plain + fr::kHeaderSize, header.length);
                     LogError("relay server error: %s", text.c_str());
                     SendRelayStatus(fr::RelayError, text.c_str());
                     break;
@@ -621,7 +689,7 @@ static DWORD WINAPI RelayThread(LPVOID)
         uint8_t bye[fr::kHeaderSize];
         fr::EncodeHeader(bye, fr::MessageType::Bye, g_relayToken.load(std::memory_order_relaxed),
                          0, 0, 0, 0, 0);
-        send(s, (const char*)bye, sizeof(bye), 0);
+        RelaySendSecure(s, bye, sizeof(bye));
         char status[160];
         snprintf(status, sizeof(status), "Relay disconnected, virtual IP %s",
                  IpToString(g_cfg.selfVirt).c_str());
@@ -660,7 +728,7 @@ static void StopRelay()
                 uint8_t bye[fr::kHeaderSize];
                 fr::EncodeHeader(bye, fr::MessageType::Bye, g_relayToken.load(std::memory_order_relaxed),
                                  0, 0, 0, 0, 0);
-                send(g_relaySocket, (const char*)bye, sizeof(bye), 0);
+                RelaySendSecure(g_relaySocket, bye, sizeof(bye));
             }
             closesocket(g_relaySocket);
             g_relaySocket = INVALID_SOCKET;

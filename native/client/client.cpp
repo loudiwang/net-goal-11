@@ -23,6 +23,7 @@
 #include <gdiplus.h>
 
 #include "../common/protocol.h"
+#include "../common/secure.h"
 #include "../common/game_names.h"
 #include "../common/version.h"
 #include "login.h"
@@ -33,6 +34,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -229,6 +231,9 @@ SOCKET g_lobbySocket = INVALID_SOCKET;
 HANDLE g_lobbyThread = nullptr;
 std::atomic<bool> g_lobbyRunning{false};
 sockaddr_in g_lobbyServer{};
+// Every lobby datagram is encrypted with this channel (X25519 + XSalsa20-Poly1305).
+ngs::Channel g_lobbyChannel;
+std::mutex g_lobbySecureMutex;
 bool g_inLobby = false;
 bool g_lobbyIsHost = false;
 bool g_lobbyStarted = false;
@@ -1126,9 +1131,17 @@ DWORD WINAPI LobbyThread(LPVOID) {
             if (error == WSAECONNRESET) continue;
             continue;
         }
-        if (received < (int)fr::kHeaderSize) continue;
+        if (!ngs::IsSecureFrame(buffer, (size_t)received)) continue;
+        if (buffer[5] != ngs::FrameData) continue;
+        uint8_t plain[ngs::kMaxPlain];
+        size_t plainLength = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_lobbySecureMutex);
+            if (!g_lobbyChannel.Open(buffer, (size_t)received, plain, plainLength)) continue;
+        }
+        if (plainLength < fr::kHeaderSize) continue;
         fr::RelayHeader header{};
-        if (!fr::DecodeHeader(buffer, (size_t)received, header)) continue;
+        if (!fr::DecodeHeader(plain, plainLength, header)) continue;
         if (header.type != fr::LobbyState && header.type != fr::LobbyStart &&
             header.type != fr::LobbyList && header.type != fr::LobbyChatMessage &&
             header.type != fr::Error) {
@@ -1136,7 +1149,7 @@ DWORD WINAPI LobbyThread(LPVOID) {
         }
         auto* event = new LobbyEvent();
         event->type = header.type;
-        event->payload.assign((const char*)buffer + fr::kHeaderSize, header.length);
+        event->payload.assign((const char*)plain + fr::kHeaderSize, header.length);
         if (g_hwnd && IsWindow(g_hwnd)) {
             PostMessageW(g_hwnd, WM_APP_LOBBY_EVENT, 0, (LPARAM)event);
         } else {
@@ -1144,6 +1157,34 @@ DWORD WINAPI LobbyThread(LPVOID) {
         }
     }
     return 0;
+}
+
+// Blocking handshake performed right before the lobby thread starts.  The
+// socket already has a 500 ms receive timeout, so this never stalls for long.
+bool LobbyHandshake(SOCKET s) {
+    std::lock_guard<std::mutex> lock(g_lobbySecureMutex);
+    g_lobbyChannel.BeginClientHandshake(GetTickCount64());
+    uint8_t init[ngs::kMaxFrame];
+    size_t initLength = 0;
+    g_lobbyChannel.BuildInit(init, initLength);
+
+    ULONGLONG deadline = GetTickCount64() + 3000;
+    ULONGLONG nextSend = 0;
+    while (GetTickCount64() < deadline) {
+        ULONGLONG now = GetTickCount64();
+        if (now >= nextSend) {
+            sendto(s, (const char*)init, (int)initLength, 0,
+                   (const sockaddr*)&g_lobbyServer, sizeof(g_lobbyServer));
+            nextSend = now + 500;
+        }
+        uint8_t buffer[ngs::kMaxFrame];
+        int received = recvfrom(s, (char*)buffer, sizeof(buffer), 0, nullptr, nullptr);
+        if (received < (int)ngs::kHeaderSize) continue;
+        if (!ngs::IsSecureFrame(buffer, (size_t)received)) continue;
+        if (buffer[5] != ngs::FrameReply) continue;
+        if (g_lobbyChannel.HandleReply(buffer, (size_t)received, GetTickCount64())) return true;
+    }
+    return false;
 }
 
 bool StartLobbyNet(const std::wstring& server, int port) {
@@ -1179,6 +1220,14 @@ bool StartLobbyNet(const std::wstring& server, int port) {
     memcpy(&g_lobbyServer, result->ai_addr, result->ai_addrlen);
     freeaddrinfo(result);
 
+    if (!LobbyHandshake(s)) {
+        closesocket(s);
+        g_lobbySocket = INVALID_SOCKET;
+        memset(&g_lobbyServer, 0, sizeof(g_lobbyServer));
+        AppendLog(L"The encrypted handshake with the server failed.");
+        return false;
+    }
+
     g_lobbyRunning.store(true, std::memory_order_relaxed);
     g_lobbyThread = CreateThread(nullptr, 0, LobbyThread, nullptr, 0, nullptr);
     if (!g_lobbyThread) {
@@ -1210,9 +1259,16 @@ bool SendLobbyPacket(uint8_t type, const void* payload, uint16_t length) {
     uint8_t buffer[sizeof(fr::RelayHeader) + fr::kMaxPayload];
     if (!fr::EncodeHeader(buffer, (fr::MessageType)type, 0, 0, 0, 0, 0, length)) return false;
     if (length && payload) memcpy(buffer + fr::kHeaderSize, payload, length);
-    int sent = sendto(g_lobbySocket, (const char*)buffer, (int)(fr::kHeaderSize + length), 0,
+    uint8_t frame[ngs::kMaxFrame];
+    size_t frameLength = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_lobbySecureMutex);
+        if (!g_lobbyChannel.ready) return false;
+        if (!g_lobbyChannel.Seal(buffer, fr::kHeaderSize + length, frame, frameLength)) return false;
+    }
+    int sent = sendto(g_lobbySocket, (const char*)frame, (int)frameLength, 0,
                       (const sockaddr*)&g_lobbyServer, sizeof(g_lobbyServer));
-    return sent == (int)(fr::kHeaderSize + length);
+    return sent == (int)frameLength;
 }
 
 bool BuildLobbyRequest(fr::LobbyRequestPayload& request, uint8_t mode) {
@@ -1257,47 +1313,8 @@ void InvalidateRoomList() {
 }
 
 // ---------------------------------------------------------------------------
-// Probe / configuration
+// Hook deployment
 // ---------------------------------------------------------------------------
-bool ProbeServer(const std::wstring& server, int port, uint32_t& subnet, uint32_t& mask) {
-    std::string host = WideToUtf8(server);
-    if (host.empty()) host = "127.0.0.1";
-    addrinfo hints{};
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_protocol = IPPROTO_UDP;
-    char portText[16];
-    snprintf(portText, sizeof(portText), "%d", port);
-    addrinfo* result = nullptr;
-    if (getaddrinfo(host.c_str(), portText, &hints, &result) != 0 || !result) return false;
-
-    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (s == INVALID_SOCKET) { freeaddrinfo(result); return false; }
-    DWORD timeout = 2000;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-
-    uint8_t packet[fr::kHeaderSize];
-    fr::EncodeHeader(packet, fr::MessageType::Probe, 0, 0, 0, 0, 0, 0);
-    bool ok = false;
-    if (sendto(s, (const char*)packet, sizeof(packet), 0, result->ai_addr, (int)result->ai_addrlen) == (int)sizeof(packet)) {
-        uint8_t buffer[512];
-        sockaddr_in from{};
-        int fromLength = sizeof(from);
-        int received = recvfrom(s, (char*)buffer, sizeof(buffer), 0, (sockaddr*)&from, &fromLength);
-        if (received >= (int)(fr::kHeaderSize + 8)) {
-            fr::RelayHeader header{};
-            if (fr::DecodeHeader(buffer, (size_t)received, header) && header.type == fr::MessageType::ProbeAck) {
-                subnet = fr::Read32(buffer + fr::kHeaderSize);
-                mask = fr::Read32(buffer + fr::kHeaderSize + 4);
-                ok = true;
-            }
-        }
-    }
-    closesocket(s);
-    freeaddrinfo(result);
-    return ok;
-}
-
 std::wstring PrepareHookFiles(bool local = false) {
     std::wstring exeDir = ExecutableDirectory();
     std::wstring source = exeDir + L"\\Net Goal 11.Hook.dll";
