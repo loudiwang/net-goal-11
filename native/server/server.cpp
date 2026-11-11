@@ -408,7 +408,7 @@ void RemoveLobbyClient(uint64_t key, const char* reason) {
             if (memberKey == key) continue;
             auto memberIt = g_lobbyClients.find(memberKey);
             if (memberIt == g_lobbyClients.end()) continue;
-            SendError(memberIt->second.addr, "房主已离开，房间已关闭");
+            SendError(memberIt->second.addr, "The host left; the room was closed");
             g_lobbyClients.erase(memberIt);
         }
         printf("[lobby] %s closed by host\n", room.code.c_str());
@@ -439,8 +439,8 @@ void HandleLobbyCreate(const uint8_t* data, const sockaddr_in& remote,
     }
     roomCode = NormalizeRoom(roomCode);
     name = SanitizeName(name);
-    if (roomCode.empty()) { SendError(remote, "房间号不能为空"); return; }
-    if (mode < 1 || mode > kMaxLobbyMode) { SendError(remote, "无效的对战模式"); return; }
+    if (roomCode.empty()) { SendError(remote, "Room code cannot be empty"); return; }
+    if (mode < 1 || mode > kMaxLobbyMode) { SendError(remote, "Invalid match mode"); return; }
 
     uint64_t key = EndpointKey(remote);
     auto existingIt = g_lobbyClients.find(key);
@@ -460,7 +460,7 @@ void HandleLobbyCreate(const uint8_t* data, const sockaddr_in& remote,
 
     auto roomIt = g_lobbyRooms.find(roomCode);
     if (roomIt != g_lobbyRooms.end()) {
-        SendError(remote, "房间已存在，请加入或更换房间号");
+        SendError(remote, "Room already exists; join it or choose another code");
         return;
     }
 
@@ -501,13 +501,13 @@ void HandleLobbyJoin(const uint8_t* data, const sockaddr_in& remote,
     }
     roomCode = NormalizeRoom(roomCode);
     name = SanitizeName(name);
-    if (roomCode.empty()) { SendError(remote, "房间号不能为空"); return; }
+    if (roomCode.empty()) { SendError(remote, "Room code cannot be empty"); return; }
 
     auto roomIt = g_lobbyRooms.find(roomCode);
-    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "房间不存在"); return; }
+    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "Room not found"); return; }
     LobbyRoom& room = roomIt->second;
-    if (room.passwordHash != passwordHash) { SendError(remote, "房间密码错误"); return; }
-    if (room.started) { SendError(remote, "游戏已经开始"); return; }
+    if (room.passwordHash != passwordHash) { SendError(remote, "Wrong room password"); return; }
+    if (room.started) { SendError(remote, "The match has already started"); return; }
 
     uint64_t key = EndpointKey(remote);
     auto existingIt = g_lobbyClients.find(key);
@@ -524,7 +524,7 @@ void HandleLobbyJoin(const uint8_t* data, const sockaddr_in& remote,
     }
 
     if (static_cast<int>(room.members.size()) >= LobbyCapacity(room.mode)) {
-        SendError(remote, "房间已满");
+        SendError(remote, "Room is full");
         return;
     }
 
@@ -541,7 +541,7 @@ void HandleLobbyJoin(const uint8_t* data, const sockaddr_in& remote,
     printf("[lobby] %s joined %s room=%s players=%zu\n", name.c_str(),
            EndpointText(remote).c_str(), roomCode.c_str(), room.members.size());
     BroadcastLobbyState(room);
-    SendLobbyChatMessage(room, "", "欢迎" + name + "用户加入" + roomCode + "房间。", true);
+    SendLobbyChatMessage(room, "", "Welcome " + name + " to room " + roomCode + ".", true);
 }
 
 void HandleLobbyPing(const uint8_t* data, const sockaddr_in& remote,
@@ -564,7 +564,7 @@ void HandleLobbyPing(const uint8_t* data, const sockaddr_in& remote,
     auto roomIt = g_lobbyRooms.find(client.room);
     if (roomIt == g_lobbyRooms.end()) {
         g_lobbyClients.erase(it);
-        SendError(remote, "房间已关闭");
+        SendError(remote, "Room closed");
         return;
     }
     bool changed = client.hasGame != hasGame || client.name != SanitizeName(name);
@@ -587,13 +587,13 @@ void HandleLobbyKick(const uint8_t* data, size_t size, const sockaddr_in& remote
     const auto* payload = reinterpret_cast<const LobbyKickPayload*>(data + kHeaderSize);
     uint64_t key = EndpointKey(remote);
     auto it = g_lobbyClients.find(key);
-    if (it == g_lobbyClients.end()) { SendError(remote, "尚未加入房间"); return; }
+    if (it == g_lobbyClients.end()) { SendError(remote, "Not in a room"); return; }
     LobbyClient& client = it->second;
     auto roomIt = g_lobbyRooms.find(client.room);
-    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "房间不存在"); return; }
+    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "Room not found"); return; }
     LobbyRoom& room = roomIt->second;
     if (!client.host || room.hostKey != key) {
-        SendError(remote, "只有房主可以踢出玩家");
+        SendError(remote, "Only the host can kick players");
         return;
     }
     if (payload->index >= room.members.size()) return;
@@ -607,7 +607,7 @@ void HandleLobbyKick(const uint8_t* data, size_t size, const sockaddr_in& remote
     }
     printf("[lobby] %s kicked %s from room=%s\n", client.name.c_str(),
            targetIt->second.name.c_str(), room.code.c_str());
-    SendError(targetIt->second.addr, "你已被房主移出房间");
+    SendError(targetIt->second.addr, "You were removed from the room by the host");
     g_lobbyClients.erase(targetIt);
     room.members.erase(room.members.begin() + payload->index);
     if (room.members.empty()) {
@@ -625,10 +625,10 @@ void HandleLobbyChat(const uint8_t* data, size_t size, const sockaddr_in& remote
         return;
     }
     auto it = g_lobbyClients.find(EndpointKey(remote));
-    if (it == g_lobbyClients.end()) { SendError(remote, "尚未加入房间"); return; }
+    if (it == g_lobbyClients.end()) { SendError(remote, "Not in a room"); return; }
     LobbyClient& client = it->second;
     auto roomIt = g_lobbyRooms.find(client.room);
-    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "房间不存在"); return; }
+    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "Room not found"); return; }
     const auto* payload = reinterpret_cast<const LobbyChatPayload*>(data + kHeaderSize);
     std::string text = SanitizeChatText(payload->text);
     if (text.empty()) return;
@@ -642,24 +642,24 @@ void HandleLobbyStart(const uint8_t* data, size_t size, const sockaddr_in& remot
     (void)header;
     uint64_t key = EndpointKey(remote);
     auto it = g_lobbyClients.find(key);
-    if (it == g_lobbyClients.end()) { SendError(remote, "尚未加入房间"); return; }
+    if (it == g_lobbyClients.end()) { SendError(remote, "Not in a room"); return; }
     LobbyClient& client = it->second;
     auto roomIt = g_lobbyRooms.find(client.room);
-    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "房间不存在"); return; }
+    if (roomIt == g_lobbyRooms.end()) { SendError(remote, "Room not found"); return; }
     LobbyRoom& room = roomIt->second;
     if (!client.host || room.hostKey != key) {
-        SendError(remote, "只有房主可以启动游戏");
+        SendError(remote, "Only the host can start the game");
         return;
     }
     if (room.members.size() < 2) {
-        SendError(remote, "请等待客户端加入房间");
+        SendError(remote, "Wait for clients to join the room");
         return;
     }
     for (uint64_t memberKey : room.members) {
         auto memberIt = g_lobbyClients.find(memberKey);
         if (memberIt == g_lobbyClients.end()) continue;
         if (!memberIt->second.hasGame) {
-            SendError(remote, "有玩家尚未设置游戏路径");
+            SendError(remote, "A player has not set the game path");
             return;
         }
     }

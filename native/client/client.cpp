@@ -425,19 +425,19 @@ void SaveClientConfig() {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-        SetStatus(L"配置保存失败");
-        AppendLog(L"保存客户端配置失败，请检查程序目录是否可写。");
+        SetStatus(L"Failed to save the settings");
+        AppendLog(L"Failed to save the client config; check that the program folder is writable.");
         return;
     }
     DWORD written = 0;
     BOOL ok = WriteFile(file, bytes.data(), (DWORD)bytes.size(), &written, nullptr);
     CloseHandle(file);
     if (ok && written == bytes.size()) {
-        SetStatus(L"房间、密码、昵称和游戏路径已保存");
-        AppendLog(L"客户端配置已保存。");
+        SetStatus(L"Room, password, nickname and game path saved");
+        AppendLog(L"Client config saved.");
     } else {
-        SetStatus(L"配置保存失败");
-        AppendLog(L"保存客户端配置失败。");
+        SetStatus(L"Failed to save the settings");
+        AppendLog(L"Failed to save the client config.");
     }
 }
 
@@ -835,7 +835,7 @@ void AppendLog(const std::wstring& message) {
     std::wstring line = prefix + message + L"\r\n";
     int length = GetWindowTextLengthW(g_log);
     if (length > 200000) {
-        SetWindowTextW(g_log, L"... 日志过长已清空 ...\r\n");
+        SetWindowTextW(g_log, L"... log cleared (too long) ...\r\n");
         length = GetWindowTextLengthW(g_log);
     }
     SendMessageW(g_log, EM_SETSEL, (WPARAM)length, (LPARAM)length);
@@ -858,7 +858,7 @@ void AppendChatLine(const std::wstring& name, const std::wstring& text) {
     std::wstring line = prefix + name + L": " + text + L"\r\n";
     int length = GetWindowTextLengthW(g_chatLog);
     if (length > 100000) {
-        SetWindowTextW(g_chatLog, L"... 聊天记录过长已清空 ...\r\n");
+        SetWindowTextW(g_chatLog, L"... chat log cleared (too long) ...\r\n");
         length = GetWindowTextLengthW(g_chatLog);
     }
     SendMessageW(g_chatLog, EM_SETSEL, (WPARAM)length, (LPARAM)length);
@@ -871,8 +871,8 @@ void SendChat() {
     std::wstring text = Trim(GetText(g_chatInput));
     if (text.empty()) return;
     if (!g_hookReady.load() || !g_relayConnected.load()) {
-        AppendChatLine(L"系统", L"尚未连接中继，聊天发送失败");
-        SetStatus(L"尚未连接中继，无法发送聊天");
+        AppendChatLine(L"System", L"Not connected to the relay; chat not sent");
+        SetStatus(L"Not connected to the relay; cannot send chat");
         return;
     }
     std::string utf8 = WideToUtf8(text);
@@ -881,8 +881,8 @@ void SendChat() {
         utf8 = TruncateUtf8(utf8, fr::kMaxChatText);
     }
     if (!SendIpc(fr::IpcChat, 0, 0, 0, 0, utf8.data(), (uint16_t)utf8.size())) {
-        AppendChatLine(L"系统", L"聊天发送失败，Hook 未连接");
-        SetStatus(L"聊天发送失败");
+        AppendChatLine(L"System", L"Chat send failed; the Hook is not connected");
+        SetStatus(L"Chat send failed");
         return;
     }
     SetText(g_chatInput, L"");
@@ -988,14 +988,14 @@ void BrowseGame() {
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = g_hwnd;
-    dialog.lpstrFilter = L"游戏主程序 (*.exe)\0*.exe\0所有文件 (*.*)\0*.*\0\0";
+    dialog.lpstrFilter = L"Game executable (*.exe)\0*.exe\0All files (*.*)\0*.*\0\0";
     dialog.lpstrFile = file;
     dialog.nMaxFile = MAX_PATH;
-    dialog.lpstrTitle = L"选择游戏主程序";
+    dialog.lpstrTitle = L"Select the game executable";
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
     if (GetOpenFileNameW(&dialog)) {
         SetText(g_game, file);
-        AppendLog(L"已选择游戏: " + std::wstring(file));
+        AppendLog(L"Selected game: " + std::wstring(file));
     }
 }
 
@@ -1088,11 +1088,11 @@ bool StartIpc() {
             g_ipc = INVALID_SOCKET;
             return false;
         }
-        AppendLog(L"本地 IPC 监听 127.0.0.1:" + std::to_wstring(guiPort) +
-                  L"，Hook 端口 " + std::to_wstring(dllPort));
+        AppendLog(L"Local IPC listening on 127.0.0.1:" + std::to_wstring(guiPort) +
+                  L", Hook port " + std::to_wstring(dllPort));
         return true;
     }
-    AppendLog(L"无法绑定本地 IPC 端口 45889-45967");
+    AppendLog(L"Cannot bind a local IPC port in 45889-45967");
     return false;
 }
 
@@ -1158,14 +1158,14 @@ bool StartLobbyNet(const std::wstring& server, int port) {
     snprintf(portText, sizeof(portText), "%d", port);
     addrinfo* result = nullptr;
     if (getaddrinfo(host.c_str(), portText, &hints, &result) != 0 || !result) {
-        AppendLog(L"无法解析联机服务器地址。");
+        AppendLog(L"Cannot resolve the online server address.");
         return false;
     }
 
     SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) {
         freeaddrinfo(result);
-        AppendLog(L"创建房间通信套接字失败。");
+        AppendLog(L"Failed to create the room socket.");
         return false;
     }
     DWORD timeout = 500;
@@ -1185,7 +1185,7 @@ bool StartLobbyNet(const std::wstring& server, int port) {
         g_lobbyRunning.store(false);
         closesocket(g_lobbySocket);
         g_lobbySocket = INVALID_SOCKET;
-        AppendLog(L"创建房间通信线程失败。");
+        AppendLog(L"Failed to create the room thread.");
         return false;
     }
     return true;
@@ -1305,7 +1305,7 @@ std::wstring PrepareHookFiles(bool local = false) {
         source = exeDir + L"\\..\\dist\\x86\\Net Goal 11.Hook.dll";
     }
     if (!FileExists(source)) {
-        throw std::runtime_error("客户端目录缺少 Net Goal 11.Hook.dll");
+        throw std::runtime_error("The client folder is missing Net Goal 11.Hook.dll");
     }
 
     wchar_t tempRoot[MAX_PATH] = {};
@@ -1323,7 +1323,7 @@ std::wstring PrepareHookFiles(bool local = false) {
 
     std::wstring dllPath = directory + L"\\Net Goal 11.Hook.dll";
     if (!CopyFileW(source.c_str(), dllPath.c_str(), FALSE)) {
-        throw std::runtime_error("复制 Hook DLL 失败");
+        throw std::runtime_error("Failed to copy the Hook DLL");
     }
 
     std::wstring serverText = g_serverAddress;
@@ -1368,7 +1368,7 @@ std::wstring PrepareHookFiles(bool local = false) {
     std::wstring iniPath = directory + L"\\Net Goal 11.Hook.ini";
     HANDLE file = CreateFileW(iniPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("写入 Hook 配置失败");
+    if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("Failed to write the Hook config");
     const unsigned char bom[2] = {0xFF, 0xFE};
     DWORD written = 0;
     WriteFile(file, bom, 2, &written, nullptr);
@@ -1385,24 +1385,24 @@ bool InjectDll(HANDLE process, const std::wstring& dllPath, std::wstring& error)
     std::wstring full = dllPath;
     size_t bytes = (full.size() + 1) * sizeof(wchar_t);
     void* remote = VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!remote) { error = L"远程分配内存失败"; return false; }
+    if (!remote) { error = L"Failed to allocate remote memory"; return false; }
     bool ok = false;
     HANDLE thread = nullptr;
     do {
         if (!WriteProcessMemory(process, remote, full.c_str(), bytes, nullptr)) {
-            error = L"写入 DLL 路径失败";
+            error = L"Failed to write the DLL path";
             break;
         }
         HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
         auto loadLibrary = (LPTHREAD_START_ROUTINE)GetProcAddress(kernel32, "LoadLibraryW");
-        if (!loadLibrary) { error = L"找不到 LoadLibraryW"; break; }
+        if (!loadLibrary) { error = L"LoadLibraryW was not found"; break; }
         thread = CreateRemoteThread(process, nullptr, 0, loadLibrary, remote, 0, nullptr);
-        if (!thread) { error = L"创建远程线程失败"; break; }
+        if (!thread) { error = L"Failed to create the remote thread"; break; }
         DWORD wait = WaitForSingleObject(thread, 10000);
-        if (wait != WAIT_OBJECT_0) { error = L"注入 DLL 超时"; break; }
+        if (wait != WAIT_OBJECT_0) { error = L"Timed out injecting the DLL"; break; }
         DWORD exitCode = 0;
         if (!GetExitCodeThread(thread, &exitCode) || exitCode == 0) {
-            error = L"游戏加载 DLL 失败";
+            error = L"The game failed to load the DLL";
             break;
         }
         ok = true;
@@ -1445,7 +1445,7 @@ bool LaunchAndInject(const std::wstring& gamePath, const std::wstring& dllPath,
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(gamePath.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
                         CREATE_SUSPENDED, nullptr, workDir.c_str(), &startup, &process)) {
-        error = L"启动游戏失败";
+        error = L"Failed to start the game";
         return false;
     }
 
@@ -1456,11 +1456,11 @@ bool LaunchAndInject(const std::wstring& gamePath, const std::wstring& dllPath,
         // still suspended, so it cannot cache the physical adapter address.
         // Pump UI messages while waiting so the client does not look frozen.
         if (waitForRelay && !WaitForRelayReady(10000)) {
-            error = L"Hook 未能在 10 秒内加入房间。单人房间也允许加入，请确认服务端、客户端和 Hook 都是最新版。";
+            error = L"The Hook did not join the room within 10 seconds. Single-player rooms are allowed too; make sure the server, client and Hook are all up to date.";
             break;
         }
         if (ResumeThread(process.hThread) == (DWORD)-1) {
-            error = L"恢复游戏线程失败";
+            error = L"Failed to resume the game thread";
             break;
         }
         ok = true;
@@ -1474,7 +1474,7 @@ bool LaunchAndInject(const std::wstring& gamePath, const std::wstring& dllPath,
 
 bool AttachAndInject(const std::wstring& dllPath, std::wstring& error) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) { error = L"枚举进程失败"; return false; }
+    if (snapshot == INVALID_HANDLE_VALUE) { error = L"Failed to enumerate processes"; return false; }
     DWORD pid = 0;
     PROCESSENTRY32W entry{};
     entry.dwSize = sizeof(entry);
@@ -1484,12 +1484,12 @@ bool AttachAndInject(const std::wstring& dllPath, std::wstring& error) {
         } while (Process32NextW(snapshot, &entry));
     }
     CloseHandle(snapshot);
-    if (!pid) { error = L"没有找到游戏进程，请先启动游戏"; return false; }
+    if (!pid) { error = L"The game process was not found; start the game first"; return false; }
 
     HANDLE process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
                                  PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ,
                                  FALSE, pid);
-    if (!process) { error = L"打开游戏进程失败（请确认权限一致）"; return false; }
+    if (!process) { error = L"Failed to open the game process (make sure both run as the same user)"; return false; }
     bool ok = InjectDll(process, dllPath, error);
     CloseHandle(process);
     return ok;
@@ -1502,7 +1502,7 @@ void HandleHookEvent(const HookEvent& event) {
     switch (event.type) {
         case fr::IpcReady:
             g_hookReady.store(true);
-            AppendLog(L"Hook 已就绪，Winsock 拦截已安装。");
+            AppendLog(L"Hook ready; Winsock interception installed.");
             break;
         case fr::IpcRelayReady: {
             g_hookReady.store(true);
@@ -1511,8 +1511,8 @@ void HandleHookEvent(const HookEvent& event) {
                 g_selfVirt.store(self);
             }
             SetEvent(g_relayReadyEvent);
-            std::wstring text = L"Hook 已连接中继服务器，可以进入 LAN 模式。";
-            if (g_selfVirt.load()) text += L" 本机虚拟 IP " + IpText(g_selfVirt.load());
+            std::wstring text = L"Hook connected to the relay server; LAN mode is ready.";
+            if (g_selfVirt.load()) text += L" local virtual IP " + IpText(g_selfVirt.load());
             AppendLog(text);
             SetStatus(text);
             break;
@@ -1524,9 +1524,9 @@ void HandleHookEvent(const HookEvent& event) {
                 g_selfVirt.store(status.selfVirt);
                 g_relayConnected.store(status.state == fr::RelayConnected);
                 std::wstring text = Utf8ToWide(std::string(status.text, strnlen(status.text, sizeof(status.text))));
-                if (status.selfVirt) text += L"（虚拟 IP " + IpText(status.selfVirt) + L"）";
+                if (status.selfVirt) text += L" (virtual IP " + IpText(status.selfVirt) + L")";
                 SetStatus(text);
-                AppendLog(L"中继状态: " + text);
+                AppendLog(L"Relay: " + text);
             }
             break;
         case fr::IpcPeers: {
@@ -1548,7 +1548,7 @@ void HandleHookEvent(const HookEvent& event) {
                         std::wstring row = Utf8ToWide(name);
                         row += L"    ";
                         row += IpText(ip);
-                        if (ip == self) row += L"  (本机)";
+                        if (ip == self) row += L"  (you)";
                         rows.push_back(row);
                         ++count;
                     }
@@ -1576,7 +1576,7 @@ void HandleHookEvent(const HookEvent& event) {
                 fr::IpcStatsPayload stats{};
                 memcpy(&stats, event.payload.data(), sizeof(stats));
                 wchar_t text[256];
-                swprintf(text, 256, L"上行 %llu 包 / %llu KB    下行 %llu 包 / %llu KB",
+                swprintf(text, 256, L"Up %llu / %llu KB   Down %llu / %llu KB",
                          (unsigned long long)stats.upPackets,
                          (unsigned long long)(stats.upBytes / 1024),
                          (unsigned long long)stats.downPackets,
@@ -1607,8 +1607,8 @@ bool ReadSettings(std::wstring& server, int& port, std::wstring& room, std::wstr
     server = g_serverAddress;
     port = g_serverPort;
     if (server.empty() || port < 1 || port > 65535) {
-        MessageBoxW(g_hwnd, L"注册信息中的服务器地址无效，请重新注册。",
-                    L"注册信息错误", MB_OK | MB_ICONERROR);
+        MessageBoxW(g_hwnd, L"The server address in the settings is invalid. Please sign in again.",
+                    L"Settings error", MB_OK | MB_ICONERROR);
         return false;
     }
     room = Trim(GetText(g_room));
@@ -1636,7 +1636,7 @@ void LeaveLobby(bool notify) {
     g_lobbyMode = g_roomMode;
     ResetRoomChat();
     CloseRoomWindow();
-    if (notify) SetStatus(L"已离开房间");
+    if (notify) SetStatus(L"Left the room");
     if (g_hwnd) SetTimer(g_hwnd, IDT_LOBBY_TIMER, 2000, nullptr);
     SendLobbyBrowse();
     UpdateLobbyUi();
@@ -1650,7 +1650,7 @@ void CreateRoomClicked() {
     if (!ShowCreateRoomDialog(room, password, mode)) { g_busy.store(false); return; }
     room = Trim(room);
     if (room.empty()) {
-        MessageBoxW(g_hwnd, L"请填写房间号。", L"新建房间", MB_OK | MB_ICONWARNING);
+        MessageBoxW(g_hwnd, L"Enter a room code.", L"New Room", MB_OK | MB_ICONWARNING);
         g_busy.store(false);
         return;
     }
@@ -1668,17 +1668,17 @@ void CreateRoomClicked() {
     g_pendingLobbyType = fr::LobbyCreate;
     g_lobbyRetry = 0;
     if (!SendLobbyRequest(fr::LobbyCreate)) {
-        SetStatus(L"创建房间失败：房间通信未就绪");
-        AppendLog(L"创建房间失败，房间通信未就绪。");
+        SetStatus(L"Failed to create the room: room channel not ready");
+        AppendLog(L"Failed to create the room; the room channel is not ready.");
         g_lobbyWaiting = false;
         g_pendingLobbyType = 0;
         g_busy.store(false);
         return;
     }
-    SetStatus(L"正在创建房间 " + room + L"（" + ModeText(mode) + L"）...");
-    AppendLog(L"创建房间 " + room + L"，模式 " + ModeText(mode));
+    SetStatus(L"Creating room " + room + L" (" + ModeText(mode) + L")...");
+    AppendLog(L"Create room " + room + L", mode " + ModeText(mode));
     if (!FileExists(Trim(GetText(g_game)))) {
-        AppendLog(L"提示：本机游戏路径没有设置，请先在主页右侧选择游戏主程序。");
+        AppendLog(L"Note: no local game path. Choose the game executable on the right of the home page first.");
     }
     SetTimer(g_hwnd, IDT_LOBBY_TIMER, 5000, nullptr);
     UpdateLobbyUi();
@@ -1700,17 +1700,17 @@ void JoinRoomByCode(const std::wstring& room, const std::wstring& password) {
     g_pendingLobbyType = fr::LobbyJoin;
     g_lobbyRetry = 0;
     if (!SendLobbyRequest(fr::LobbyJoin)) {
-        SetStatus(L"加入房间失败：房间通信未就绪");
-        AppendLog(L"加入房间失败，房间通信未就绪。");
+        SetStatus(L"Failed to join: room channel not ready");
+        AppendLog(L"Failed to join; the room channel is not ready.");
         g_lobbyWaiting = false;
         g_pendingLobbyType = 0;
         g_busy.store(false);
         return;
     }
-    SetStatus(L"正在加入房间 " + room + L"...");
-    AppendLog(L"加入房间 " + room);
+    SetStatus(L"Joining room " + room + L"...");
+    AppendLog(L"Join room " + room);
     if (!FileExists(Trim(GetText(g_game)))) {
-        AppendLog(L"提示：本机游戏路径没有设置，房主将无法启动游戏。请先选择游戏主程序。");
+        AppendLog(L"Note: no local game path; the host cannot start the game. Choose the game executable first.");
     }
     SetTimer(g_hwnd, IDT_LOBBY_TIMER, 5000, nullptr);
     UpdateLobbyUi();
@@ -1723,19 +1723,19 @@ void JoinRowClicked(int index) {
     const LobbyRoomInfo info = g_roomList[index];
     if (g_inLobby) {
         if (info.code == g_lobbyRoom) {
-            SetStatus(L"你已经在该房间中");
+            SetStatus(L"You are already in this room");
         } else {
-            MessageBoxW(g_hwnd, L"请先离开当前房间，再加入其他房间。", L"加入房间",
+            MessageBoxW(g_hwnd, L"Leave the current room before joining another one.", L"JOIN ROOM",
                         MB_OK | MB_ICONINFORMATION);
         }
         return;
     }
     if (info.started) {
-        SetStatus(L"该房间已经开始比赛");
+        SetStatus(L"The match in this room has already started");
         return;
     }
     if (info.members >= info.capacity) {
-        MessageBoxW(g_hwnd, L"房间人数已满，请选择其他房间。", L"加入房间",
+        MessageBoxW(g_hwnd, L"This room is full; please choose another one.", L"JOIN ROOM",
                     MB_OK | MB_ICONWARNING);
         return;
     }
@@ -1747,7 +1747,7 @@ void JoinRowClicked(int index) {
 void LaunchGameFlow() {
     if (g_startingGame) return;
     if (g_busy.exchange(true)) {
-        AppendLog(L"正在处理其他操作，稍后再启动游戏。");
+        AppendLog(L"Another operation is in progress; launch the game in a moment.");
         return;
     }
     g_startingGame = true;
@@ -1760,10 +1760,10 @@ void LaunchGameFlow() {
         return;
     }
     if (!FileExists(game)) {
-        std::wstring message = L"游戏路径没有设置或文件不存在，无法启动游戏。请先在主界面右侧选择游戏主程序。";
+        std::wstring message = L"The game path is not set or the file is missing; cannot start the game. Choose the game executable on the right of the main window first.";
         AppendLog(message);
-        SetStatus(L"游戏路径没有设置，无法启动");
-        MessageBoxW(g_hwnd, message.c_str(), L"无法启动游戏", MB_OK | MB_ICONWARNING);
+        SetStatus(L"No game path set; cannot launch");
+        MessageBoxW(g_hwnd, message.c_str(), L"Cannot start the game", MB_OK | MB_ICONWARNING);
         g_startingGame = false;
         g_lobbyStarted = false;
         g_busy.store(false);
@@ -1776,27 +1776,27 @@ void LaunchGameFlow() {
         return;
     }
 
-    SetStatus(L"正在启动并注入游戏...");
-    SetPeerHint(L"正在启动游戏，Hook 加入房间后显示成员");
+    SetStatus(L"Launching and injecting the game...");
+    SetPeerHint(L"Launching the game; members appear once the Hook joins");
     ResetEvent(g_relayReadyEvent);
     try {
         std::wstring dll = PrepareHookFiles();
-        AppendLog(L"启动游戏: " + game);
+        AppendLog(L"Launching: " + game);
         std::wstring error;
         if (!LaunchAndInject(game, dll, error)) {
-            AppendLog(L"启动/注入失败: " + error);
-            SetStatus(L"注入失败");
-            MessageBoxW(g_hwnd, error.c_str(), L"注入失败", MB_OK | MB_ICONERROR);
+            AppendLog(L"Launch/inject failed: " + error);
+            SetStatus(L"Injection failed");
+            MessageBoxW(g_hwnd, error.c_str(), L"Injection failed", MB_OK | MB_ICONERROR);
             g_lobbyStarted = false;
         } else {
-            AppendLog(L"注入完成，游戏已恢复运行。");
-            SetStatus(L"注入完成，等待 Hook 状态...");
+            AppendLog(L"Injection complete; the game resumed.");
+            SetStatus(L"Injection complete; waiting for the Hook status...");
         }
     } catch (const std::exception& ex) {
         std::wstring error = Utf8ToWide(ex.what());
-        AppendLog(L"启动/注入失败: " + error);
-        SetStatus(L"注入失败");
-        MessageBoxW(g_hwnd, error.c_str(), L"注入失败", MB_OK | MB_ICONERROR);
+        AppendLog(L"Launch/inject failed: " + error);
+        SetStatus(L"Injection failed");
+        MessageBoxW(g_hwnd, error.c_str(), L"Injection failed", MB_OK | MB_ICONERROR);
         g_lobbyStarted = false;
     }
     g_startingGame = false;
@@ -1805,7 +1805,7 @@ void LaunchGameFlow() {
 
 // ---------------------------------------------------------------------------
 // Local single-player launch: start the game with the Hook, but do not wait
-// for a relay session.  This is the "启动单机游戏" button.
+// for a relay session.  This is the "Launch game" button.
 // ---------------------------------------------------------------------------
 DWORD WINAPI LocalLaunchThread(LPVOID parameter) {
     std::wstring game = *reinterpret_cast<std::wstring*>(parameter);
@@ -1821,13 +1821,13 @@ DWORD WINAPI LocalLaunchThread(LPVOID parameter) {
     }
 
     if (ok) {
-        AppendLog(L"游戏已启动。");
-        SetStatus(L"游戏已启动。");
+        AppendLog(L"The game has started.");
+        SetStatus(L"The game has started.");
     } else {
-        if (error.empty()) error = L"启动游戏失败。";
-        AppendLog(L"启动单机游戏失败：" + error);
-        SetStatus(L"启动单机游戏失败");
-        MessageBoxW(g_hwnd, error.c_str(), L"启动单机游戏",
+        if (error.empty()) error = L"Failed to start the game.";
+        AppendLog(L"Failed to launch the game: " + error);
+        SetStatus(L"Failed to launch the game");
+        MessageBoxW(g_hwnd, error.c_str(), L"Launch game",
                     MB_OK | MB_ICONERROR);
     }
 
@@ -1842,8 +1842,8 @@ void StartLocalGameClicked() {
     std::wstring game = Trim(GetText(g_game));
     if (game.empty() || !FileExists(game)) {
         MessageBoxW(g_hwnd,
-                    L"请先在右侧设置游戏主程序的路径。",
-                    L"启动单机游戏", MB_OK | MB_ICONWARNING);
+                    L"Set the game executable path on the right first.",
+                    L"Launch game", MB_OK | MB_ICONWARNING);
         g_busy.store(false);
         return;
     }
@@ -1866,22 +1866,22 @@ void KickMemberClicked(int index) {
     fr::LobbyKickPayload payload{};
     payload.index = (uint8_t)index;
     if (!SendLobbyPacket(fr::LobbyKick, &payload, sizeof(payload))) return;
-    SetStatus(L"正在将 " + g_lobbyMembers[index].name + L" 移出房间...");
-    AppendLog(L"已请求移出玩家: " + g_lobbyMembers[index].name);
+    SetStatus(L"Kicking " + g_lobbyMembers[index].name + L" from the room...");
+    AppendLog(L"Requested kick: " + g_lobbyMembers[index].name);
 }
 
 void StartGameClicked() {
     if (!g_inLobby) {
-        MessageBoxW(g_hwnd, L"请先创建或加入房间。", L"无法启动", MB_OK | MB_ICONWARNING);
+        MessageBoxW(g_hwnd, L"Create or join a room first.", L"Cannot launch", MB_OK | MB_ICONWARNING);
         return;
     }
     if (!g_lobbyIsHost) {
-        MessageBoxW(g_hwnd, L"只有房主可以启动游戏，请等待房主启动。", L"无法启动",
+        MessageBoxW(g_hwnd, L"Only the host can start the game; please wait.", L"Cannot launch",
                     MB_OK | MB_ICONWARNING);
         return;
     }
     if (g_lobbyMembers.size() < 2) {
-        MessageBoxW(g_hwnd, L"至少需要 2 名玩家才能开始比赛。", L"无法开始比赛",
+        MessageBoxW(g_hwnd, L"At least 2 players are needed to start a match.", L"Cannot start the match",
                     MB_OK | MB_ICONWARNING);
         return;
     }
@@ -1892,14 +1892,14 @@ void StartGameClicked() {
     }
     if (!FileExists(gamePath)) {
         MessageBoxW(g_hwnd,
-                    L"游戏路径没有设置或文件不存在，无法启动游戏。请先选择游戏主程序。",
-                    L"无法启动游戏", MB_OK | MB_ICONWARNING);
+                    L"The game path is not set or the file is missing; cannot start the game. Choose the game executable first.",
+                    L"Cannot start the game", MB_OK | MB_ICONWARNING);
         return;
     }
     for (const auto& member : g_lobbyMembers) {
         if (!member.hasGame) {
-            std::wstring text = member.name + L" 还没有设置游戏路径，暂时不能启动。";
-            MessageBoxW(g_hwnd, text.c_str(), L"无法启动游戏", MB_OK | MB_ICONWARNING);
+            std::wstring text = member.name + L" no game path yet, cannot launch.";
+            MessageBoxW(g_hwnd, text.c_str(), L"Cannot start the game", MB_OK | MB_ICONWARNING);
             return;
         }
     }
@@ -1908,11 +1908,11 @@ void StartGameClicked() {
     fr::LobbyStartPayload payload{};
     payload.mode = (uint8_t)g_lobbyMode;
     if (!SendLobbyPacket(fr::LobbyStart, &payload, sizeof(payload))) {
-        SetStatus(L"启动请求发送失败");
+        SetStatus(L"Failed to send the start request");
         return;
     }
-    SetStatus(L"已发送启动请求，等待所有玩家启动游戏...");
-    AppendLog(L"已请求启动游戏，等待服务器确认。");
+    SetStatus(L"Start request sent; waiting for all players to launch...");
+    AppendLog(L"Start requested; waiting for the server to confirm.");
 }
 
 void LaunchClicked() {
@@ -1926,25 +1926,25 @@ void AttachClicked() {
     if (!ReadSettings(server, port, room, name, game)) { g_busy.store(false); return; }
     if (!StartIpc()) { g_busy.store(false); return; }
 
-    SetStatus(L"正在注入已启动的游戏...");
-    SetPeerHint(L"提示：正在注入，Hook 加入房间后显示成员");
+    SetStatus(L"Injecting into the running game...");
+    SetPeerHint(L"Note: injecting; members appear once the Hook joins the room");
     ResetEvent(g_relayReadyEvent);
     try {
         std::wstring dll = PrepareHookFiles();
         std::wstring error;
         if (!AttachAndInject(dll, error)) {
-            AppendLog(L"注入失败: " + error);
-            SetStatus(L"注入失败");
-            MessageBoxW(g_hwnd, error.c_str(), L"注入失败", MB_OK | MB_ICONERROR);
+            AppendLog(L"Injection failed: " + error);
+            SetStatus(L"Injection failed");
+            MessageBoxW(g_hwnd, error.c_str(), L"Injection failed", MB_OK | MB_ICONERROR);
         } else {
-            AppendLog(L"已注入游戏进程。若游戏已启动很久，适配器地址可能已缓存，建议重启游戏后再注入。");
-            SetStatus(L"已注入，等待 Hook 状态...");
+            AppendLog(L"Injected into the game process. If the game has been running for a long time the adapter address may be cached; restart the game and inject again.");
+            SetStatus(L"Injected; waiting for the Hook status...");
         }
     } catch (const std::exception& ex) {
         std::wstring error = Utf8ToWide(ex.what());
-        AppendLog(L"注入失败: " + error);
-        SetStatus(L"注入失败");
-        MessageBoxW(g_hwnd, error.c_str(), L"注入失败", MB_OK | MB_ICONERROR);
+        AppendLog(L"Injection failed: " + error);
+        SetStatus(L"Injection failed");
+        MessageBoxW(g_hwnd, error.c_str(), L"Injection failed", MB_OK | MB_ICONERROR);
     }
     g_busy.store(false);
 }
@@ -1952,11 +1952,11 @@ void AttachClicked() {
 void DisconnectClicked() {
     if (g_hookReady.load()) {
         SendIpc(fr::IpcRelayStop, 0, 0, 0, 0, nullptr, 0);
-        AppendLog(L"已请求 Hook 断开中继；游戏仍在运行。");
-        SetStatus(L"已断开（游戏仍在运行）");
-        SetPeerHint(L"提示：已断开中继");
+        AppendLog(L"Asked the Hook to disconnect from the relay; the game is still running.");
+        SetStatus(L"Disconnected (the game is still running)");
+        SetPeerHint(L"Note: the relay is disconnected");
     } else {
-        SetStatus(L"当前没有已注入的 Hook");
+        SetStatus(L"No Hook injected");
     }
 }
 
@@ -2030,11 +2030,11 @@ void HandleLobbyEvent(const LobbyEvent& event) {
         }
         OpenRoomWindow();
         UpdateLobbyUi();
-        std::wstring text = L"已加入房间 " + g_lobbyRoom + L"（" +
-                            ModeText(g_lobbyMode) + L"，" +
-                            std::to_wstring(g_lobbyMembers.size()) + L"人）";
-        if (g_lobbyIsHost) text += L"，你是房主";
-        else text += L"，等待房主开始比赛";
+        std::wstring text = L"Joined room " + g_lobbyRoom + L" (" +
+                            ModeText(g_lobbyMode) + L", " +
+                            std::to_wstring(g_lobbyMembers.size()) + L" players)";
+        if (g_lobbyIsHost) text += L"; you are the host";
+        else text += L"; waiting for the host to start";
         SetStatus(text);
         AppendLog(text);
         SendLobbyBrowse();
@@ -2045,8 +2045,8 @@ void HandleLobbyEvent(const LobbyEvent& event) {
         if (!g_inLobby || g_lobbyStarted) return;
         g_lobbyStarted = true;
         UpdateLobbyUi();
-        AppendLog(L"房主已开始比赛，正在启动本机游戏...");
-        SetStatus(L"房主已开始比赛，正在启动...");
+        AppendLog(L"The host started the match; launching the game...");
+        SetStatus(L"The host started the match; launching...");
         LaunchGameFlow();
         UpdateLobbyUi();
         return;
@@ -2059,11 +2059,11 @@ void HandleLobbyEvent(const LobbyEvent& event) {
         std::string time(payload->time, strnlen(payload->time, sizeof(payload->time)));
         std::string name(payload->name, strnlen(payload->name, sizeof(payload->name)));
         std::string text(payload->text, strnlen(payload->text, sizeof(payload->text)));
-        std::wstring line = L"【" + Utf8ToWide(time) + L"】 ";
+        std::wstring line = L"[" + Utf8ToWide(time) + L"] ";
         if (payload->system) {
             line += Utf8ToWide(text);
         } else {
-            line += Utf8ToWide(name) + L"：" + Utf8ToWide(text);
+            line += Utf8ToWide(name) + L": " + Utf8ToWide(text);
         }
         AppendRoomChatLine(line);
         return;
@@ -2071,22 +2071,22 @@ void HandleLobbyEvent(const LobbyEvent& event) {
 
     if (event.type == fr::Error) {
         std::wstring text = Utf8ToWide(event.payload);
-        if (text.empty()) text = L"房间操作失败";
-        AppendLog(L"房间提示: " + text);
+        if (text.empty()) text = L"Room action failed";
+        AppendLog(L"Room: " + text);
         SetStatus(text);
         bool wasWaiting = g_lobbyWaiting;
         if (wasWaiting) {
             g_lobbyWaiting = false;
             g_pendingLobbyType = 0;
         }
-        bool kicked = text.find(L"移出房间") != std::wstring::npos;
-        if (kicked || text.find(L"房主已离开") != std::wstring::npos ||
-            text.find(L"房间已关闭") != std::wstring::npos ||
+        bool kicked = text.find(L"Kick from room") != std::wstring::npos;
+        if (kicked || text.find(L"The host left") != std::wstring::npos ||
+            text.find(L"Room closed") != std::wstring::npos ||
             text.find(L"lobby session expired") != std::wstring::npos) {
             LeaveLobby(false);
         }
         if (wasWaiting || kicked) {
-            MessageBoxW(g_hwnd, text.c_str(), kicked ? L"已被移出房间" : L"房间操作失败",
+            MessageBoxW(g_hwnd, text.c_str(), kicked ? L"You were removed from the room" : L"Room action failed",
                         MB_OK | MB_ICONWARNING);
         }
         UpdateLobbyUi();
@@ -2166,7 +2166,7 @@ void CreateControls() {
     insert.hParent = TVI_ROOT;
     insert.hInsertAfter = TVI_LAST;
     insert.item.mask = TVIF_TEXT;
-    insert.item.pszText = (LPWSTR)L"对战游戏平台 (1)";
+    insert.item.pszText = (LPWSTR)L"LAN games (1)";
     HTREEITEM root = TreeView_InsertItem(g_tree, &insert);
 
     insert.hParent = root;
@@ -2178,20 +2178,20 @@ void CreateControls() {
 
     // Centre: public room browser.  Rows are custom painted in PaintWindow so
     // each room can carry its own 加入房间 hotspot.
-    g_newRoom = MakeButton(ID_NEW_ROOM, L"新建房间", 632, 164, 138, 34);
-    g_refreshRooms = MakeButton(ID_REFRESH_ROOMS, L"刷新", 548, 164, 72, 34);
+    g_newRoom = MakeButton(ID_NEW_ROOM, L"New Room", 632, 164, 138, 34);
+    g_refreshRooms = MakeButton(ID_REFRESH_ROOMS, L"Refresh", 548, 164, 72, 34);
 
     // Right: player settings.
     std::wstring defaultName = DefaultNickname();
     g_name = MakeEdit(ID_NAME, defaultName.c_str(), 800, 214, 226, 30);
     g_game = MakeEdit(ID_GAME, L"", 800, 282, 226, 30);
     SendMessageW(g_game, 0x1501 /* EM_SETCUEBANNER */, FALSE,
-                 (LPARAM)L"选择游戏主程序");
-    g_browse = MakeButton(ID_BROWSE, L"浏览...", 800, 320, 108, 32);
-    g_saveConfig = MakeButton(ID_SAVE_CONFIG, L"保存设置", 916, 320, 110, 32);
-    g_localGame = MakeButton(ID_LOCAL_GAME, L"启动单机游戏", 800, 357, 226, 32);
+                 (LPARAM)L"Select the game executable");
+    g_browse = MakeButton(ID_BROWSE, L"Browse...", 800, 320, 108, 32);
+    g_saveConfig = MakeButton(ID_SAVE_CONFIG, L"Save settings", 916, 320, 110, 32);
+    g_localGame = MakeButton(ID_LOCAL_GAME, L"Launch game", 800, 357, 226, 32);
 
-    g_verbose = CreateWindowExW(0, L"BUTTON", L"报文日志",
+    g_verbose = CreateWindowExW(0, L"BUTTON", L"Packet log",
                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                     BS_AUTOCHECKBOX | BS_OWNERDRAW,
                                 917, 394, 109, 22, g_hwnd, (HMENU)ID_VERBOSE, g_instance, nullptr);
@@ -2206,9 +2206,9 @@ void CreateControls() {
     SetupLogScrollbar();
 
     // Bottom status and counters.
-    g_status = MakeLabel(L"选择房间加入，或点击右上角“新建房间”。", 20, 690, 760, 24);
+    g_status = MakeLabel(L"Pick a room to join, or click \"New Room\" at the top right.", 20, 690, 760, 24);
     SendMessageW(g_status, WM_SETFONT, (WPARAM)g_smallFont, TRUE);
-    g_stats = MakeLabel(L"上行 0 包 / 0 KB    下行 0 包 / 0 KB", 800, 690, 230, 24);
+    g_stats = MakeLabel(L"Up 0 / 0 KB   Down 0 / 0 KB", 800, 690, 230, 24);
     SendMessageW(g_stats, WM_SETFONT, (WPARAM)g_smallFont, TRUE);
 
     LoadClientConfig();
@@ -2474,9 +2474,9 @@ void PaintRoomList(HDC dc) {
     SelectObject(dc, g_smallFont);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(178, 166, 140));
-    TextOutW(dc, kRoomListLeft + 10, 204, L"房间 / 房主", (int)wcslen(L"房间 / 房主"));
-    TextOutW(dc, kRoomListLeft + 250, 204, L"模式", (int)wcslen(L"模式"));
-    TextOutW(dc, kRoomListLeft + 315, 204, L"人数", (int)wcslen(L"人数"));
+    TextOutW(dc, kRoomListLeft + 10, 204, L"ROOM / HOST", (int)wcslen(L"ROOM / HOST"));
+    TextOutW(dc, kRoomListLeft + 250, 204, L"Mode", (int)wcslen(L"Mode"));
+    TextOutW(dc, kRoomListLeft + 315, 204, L"Players", (int)wcslen(L"Players"));
 
     int listBottom = kRoomListTop + kRoomRowHeight * kRoomListVisible;
     int saved = SaveDC(dc);
@@ -2488,7 +2488,7 @@ void PaintRoomList(HDC dc) {
         RECT empty{kRoomListLeft, kRoomListTop, kRoomListRight,
                    kRoomListTop + kRoomRowHeight * 2};
         DrawTextW(dc,
-                  g_lobbyWaiting ? L"正在连接房间服务器..." : L"暂无房间，点击右上角“新建房间”",
+                  g_lobbyWaiting ? L"Connecting to the room server..." : L"No rooms yet; click \"New Room\" at the top right",
                   -1, &empty, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         RestoreDC(dc, saved);
         return;
@@ -2511,9 +2511,9 @@ void PaintRoomList(HDC dc) {
         DrawTextW(dc, info.code.c_str(), -1, &codeRect,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-        std::wstring sub = info.host.empty() ? L"房主" : (L"房主 " + info.host);
-        if (info.hasPassword) sub += L"   ·   有密码";
-        if (info.started) sub += L"   ·   已开始";
+        std::wstring sub = info.host.empty() ? L"Host" : (L"Host " + info.host);
+        if (info.hasPassword) sub += L"   ·   locked";
+        if (info.started) sub += L"   ·   started";
         RECT hostRect{rc.left + 16, rc.top + 38, rc.left + 244, rc.top + 62};
         SelectObject(dc, g_smallFont);
         SetTextColor(dc, RGB(165, 155, 134));
@@ -2537,12 +2537,12 @@ void PaintRoomList(HDC dc) {
         if (currentRoom) {
             FillRoundedRect(dc, join, RGB(38, 38, 35), RGB(88, 79, 54), 6);
             SetTextColor(dc, RGB(170, 155, 122));
-            DrawTextW(dc, L"已加入", -1, &join,
+            DrawTextW(dc, L"Joined", -1, &join,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         } else if (info.started) {
             FillRoundedRect(dc, join, RGB(38, 38, 35), RGB(88, 79, 54), 6);
             SetTextColor(dc, RGB(135, 126, 108));
-            DrawTextW(dc, L"已开始", -1, &join,
+            DrawTextW(dc, L"Started", -1, &join,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         } else {
             FillRoundedGradient(dc, join,
@@ -2556,7 +2556,7 @@ void PaintRoomList(HDC dc) {
             SelectObject(dc, oldPen);
             DeleteObject(highlight);
             SetTextColor(dc, RGB(255, 246, 240));
-            DrawTextW(dc, L"加入房间", -1, &join,
+            DrawTextW(dc, L"JOIN ROOM", -1, &join,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
@@ -2566,7 +2566,7 @@ void PaintRoomList(HDC dc) {
         SelectObject(dc, g_smallFont);
         SetTextColor(dc, RGB(140, 129, 106));
         wchar_t hint[64];
-        swprintf(hint, 64, L"共 %d 个房间 · 滚轮查看更多", total);
+        swprintf(hint, 64, L"%d rooms · scroll to see more", total);
         TextOutW(dc, kRoomListLeft + 4, listBottom + 2, hint, (int)wcslen(hint));
     }
 }
@@ -2590,11 +2590,11 @@ constexpr int kRoomChatLogHeight = 400;
 constexpr int kRoomChatInputTop = 580;
 
 RECT RoomStartRect() {
-    return RECT{kRoomMemberLeft, kRoomStartTop, kRoomMemberLeft + 160, kRoomStartTop + 48};
+    return RECT{kRoomMemberLeft, kRoomStartTop, kRoomMemberLeft + 130, kRoomStartTop + 48};
 }
 
 RECT RoomLeaveRect() {
-    return RECT{kRoomMemberLeft + 170, kRoomStartTop, kRoomMemberRight, kRoomStartTop + 48};
+    return RECT{kRoomMemberLeft + 140, kRoomStartTop, kRoomMemberRight, kRoomStartTop + 48};
 }
 
 RECT RoomKickRect(int index) {
@@ -2650,7 +2650,7 @@ void PaintRoomWindow(HWND hwnd, HDC dc) {
     DeleteObject(titleShadow);
 
     SetBkMode(dc, TRANSPARENT);
-    DrawTitleParts(dc, 18, 0, kRoomTitleHeight, L"游戏房间  ", g_lobbyRoom.c_str(), L"",
+    DrawTitleParts(dc, 18, 0, kRoomTitleHeight, L"Game room  ", g_lobbyRoom.c_str(), L"",
                    g_bannerFont, RGB(255, 245, 238), RGB(255, 210, 140));
 
     HPEN closePen = CreatePen(PS_SOLID, 2, RGB(255, 235, 225));
@@ -2678,10 +2678,10 @@ void PaintRoomWindow(HWND hwnd, HDC dc) {
     FillRoundedRect(dc, info, RGB(22, 23, 22), RGB(88, 75, 45), 10);
     SetTextColor(dc, RGB(210, 190, 150));
     SelectObject(dc, g_font);
-    TextOutW(dc, 28, 66, L"房间号", 3);
-    TextOutW(dc, 300, 66, L"模式", 2);
-    TextOutW(dc, 380, 66, L"人数", 2);
-    TextOutW(dc, 470, 66, L"密码", 2);
+    TextOutW(dc, 28, 66, L"Room code", (int)wcslen(L"Room code"));
+    TextOutW(dc, 300, 66, L"Mode", (int)wcslen(L"Mode"));
+    TextOutW(dc, 380, 66, L"Players", (int)wcslen(L"Players"));
+    TextOutW(dc, 470, 66, L"Password", (int)wcslen(L"Password"));
 
     SetTextColor(dc, RGB(243, 213, 143));
     SelectObject(dc, g_bannerFont);
@@ -2694,20 +2694,23 @@ void PaintRoomWindow(HWND hwnd, HDC dc) {
     std::wstring count = std::to_wstring(g_lobbyMembers.size()) + L"/" +
                          std::to_wstring(g_lobbyMode * 2);
     TextOutW(dc, 380, 90, count.c_str(), static_cast<int>(count.size()));
-    TextOutW(dc, 470, 90, g_lobbyHasPassword ? L"有" : L"无", 1);
+    {
+        const wchar_t* passwordText = g_lobbyHasPassword ? L"Yes" : L"No";
+        TextOutW(dc, 470, 90, passwordText, (int)wcslen(passwordText));
+    }
 
     // Member list.
     SelectObject(dc, g_font);
     SetTextColor(dc, RGB(226, 190, 110));
-    TextOutW(dc, kRoomMemberLeft + 6, 144, L"房间成员",
-             (int)wcslen(L"房间成员"));
+    TextOutW(dc, kRoomMemberLeft + 6, 144, L"ROOM MEMBERS",
+             (int)wcslen(L"ROOM MEMBERS"));
 
     // Chat panel on the left.  The edit controls themselves are child
     // windows; this only draws the frame, title and divider.
     RECT chatPanel{16, 140, 596, 676};
     FillRoundedRect(dc, chatPanel, RGB(18, 19, 18), RGB(70, 60, 38), 10);
     SetTextColor(dc, RGB(226, 190, 110));
-    TextOutW(dc, kRoomChatLeft, 142, L"房间聊天", 4);
+    TextOutW(dc, kRoomChatLeft, 142, L"ROOM CHAT", (int)wcslen(L"ROOM CHAT"));
 
     RECT logFrame{kRoomChatLeft - 4, kRoomChatTop - 4, kRoomChatRight + 4,
                   kRoomChatTop + kRoomChatLogHeight + 4};
@@ -2727,13 +2730,13 @@ void PaintRoomWindow(HWND hwnd, HDC dc) {
         SelectObject(dc, g_font);
         SetTextColor(dc, RGB(230, 220, 196));
         std::wstring name = member.name;
-        if (member.host) name += L"   [房主]";
+        if (member.host) name += L"   [host]";
         TextOutW(dc, row.left + 14, row.top + 9, name.c_str(),
                  static_cast<int>(name.size()));
 
         SelectObject(dc, g_smallFont);
         SetTextColor(dc, member.hasGame ? RGB(150, 190, 130) : RGB(205, 120, 110));
-        const wchar_t* gameState = member.hasGame ? L"已就绪" : L"未设置";
+        const wchar_t* gameState = member.hasGame ? L"Ready" : L"Not set";
         TextOutW(dc, kRoomMemberLeft + 146, row.top + 11, gameState, (int)wcslen(gameState));
 
         if (g_lobbyIsHost && !member.host) {
@@ -2743,15 +2746,15 @@ void PaintRoomWindow(HWND hwnd, HDC dc) {
                             RGB(196, 96, 78), 6);
             SetTextColor(dc, RGB(246, 220, 210));
             SelectObject(dc, g_smallFont);
-            DrawTextW(dc, L"踢出", -1, &kick,
+            DrawTextW(dc, L"KICK", -1, &kick,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
 
     bool canStart = g_lobbyIsHost && !g_lobbyStarted;
     SelectObject(dc, g_font);
-    DrawRoomButton(dc, RoomStartRect(), L"开始比赛", canStart, true);
-    DrawRoomButton(dc, RoomLeaveRect(), L"离开房间", true, false);
+    DrawRoomButton(dc, RoomStartRect(), L"START", canStart, true);
+    DrawRoomButton(dc, RoomLeaveRect(), L"LEAVE", true, false);
 
     HBRUSH outer = CreateSolidBrush(RGB(155, 121, 55));
     FrameRect(dc, &client, outer);
@@ -2797,7 +2800,7 @@ void SendRoomChat() {
     fr::LobbyChatPayload payload{};
     memcpy(payload.text, utf8.data(), utf8.size());
     if (!SendLobbyPacket(fr::LobbyChat, &payload, sizeof(payload))) {
-        SetStatus(L"聊天发送失败");
+        SetStatus(L"Chat send failed");
         return;
     }
     SetText(g_roomChatInput, L"");
@@ -2817,7 +2820,7 @@ void CreateRoomChatControls(HWND hwnd) {
         kRoomChatLeft, kRoomChatInputTop, 482, 44, hwnd,
         (HMENU)ID_ROOM_CHAT_INPUT, g_instance, nullptr);
     g_roomChatSend = CreateWindowExW(
-        0, L"BUTTON", L"发送", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+        0, L"BUTTON", L"Send", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
         kRoomChatRight - 66, kRoomChatInputTop, 66, 44, hwnd,
         (HMENU)ID_ROOM_CHAT_SEND, g_instance, nullptr);
     if (!g_roomChatLog || !g_roomChatInput || !g_roomChatSend) return;
@@ -2881,7 +2884,7 @@ LRESULT CALLBACK RoomWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
         case WM_DRAWITEM: {
             auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
             if (!item || item->CtlID != ID_ROOM_CHAT_SEND) break;
-            DrawRoomButton(item->hDC, item->rcItem, L"发送", true, true);
+            DrawRoomButton(item->hDC, item->rcItem, L"Send", true, true);
             return TRUE;
         }
         case WM_CTLCOLORSTATIC:
@@ -2956,10 +2959,10 @@ LRESULT CALLBACK RoomWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             }
             if (PointInRect(RoomStartRect(), pt)) {
                 if (!g_lobbyIsHost) {
-                    MessageBoxW(hwnd, L"只有房主可以开始比赛，请等待房主开始。",
-                                L"开始比赛", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxW(hwnd, L"Only the host can start the match; please wait.",
+                                L"START MATCH", MB_OK | MB_ICONINFORMATION);
                 } else if (g_lobbyStarted) {
-                    MessageBoxW(hwnd, L"比赛已经开始了。", L"开始比赛",
+                    MessageBoxW(hwnd, L"The match has already started.", L"START MATCH",
                                 MB_OK | MB_ICONINFORMATION);
                 } else {
                     StartGameClicked();
@@ -3022,7 +3025,7 @@ void OpenRoomWindow() {
     int y = work.top + ((work.bottom - work.top) - kRoomWndHeight) / 2;
     g_roomWindow = CreateWindowExW(WS_EX_APPWINDOW | WS_EX_COMPOSITED,
                                    L"NetGoal11Room",
-                                   L"Net Goal 11 - 游戏房间", WS_POPUP | WS_CLIPCHILDREN,
+                                   L"Net Goal 11 - Game room", WS_POPUP | WS_CLIPCHILDREN,
                                    x, y, kRoomWndWidth, kRoomWndHeight, g_hwnd, nullptr,
                                    g_instance, nullptr);
     if (!g_roomWindow) return;
@@ -3074,7 +3077,7 @@ LRESULT CALLBACK RoomDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                 state->password = GetText(state->editPassword);
                 if (state->kind == 0) {
                     if (state->room.empty()) {
-                        MessageBoxW(hwnd, L"请填写房间号。", L"新建房间",
+                        MessageBoxW(hwnd, L"Enter a room code.", L"New Room",
                                     MB_OK | MB_ICONWARNING);
                         return 0;
                     }
@@ -3246,24 +3249,24 @@ bool ShowCreateRoomDialog(std::wstring& room, std::wstring& password, int& mode)
     RECT rc{0, 0, 560, 330};
     AdjustWindowRect(&rc, WS_POPUP | WS_CAPTION | WS_SYSMENU, FALSE);
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"NetGoal11RoomDialog",
-                                  L"新建房间", WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                                  L"New Room", WS_POPUP | WS_CAPTION | WS_SYSMENU,
                                   CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left,
                                   rc.bottom - rc.top, g_hwnd, nullptr, g_instance, nullptr);
     if (!dialog) return false;
 
-    HWND label1 = CreateWindowExW(0, L"STATIC", L"房间号", WS_CHILD | WS_VISIBLE,
+    HWND label1 = CreateWindowExW(0, L"STATIC", L"Room code", WS_CHILD | WS_VISIBLE,
                                   28, 30, 110, 24, dialog, nullptr, g_instance, nullptr);
     state.editRoom = CreateWindowExW(0, L"EDIT", SuggestRoomCode().c_str(),
                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                                      150, 24, 382, 40, dialog, nullptr, g_instance, nullptr);
-    HWND label2 = CreateWindowExW(0, L"STATIC", L"密码", WS_CHILD | WS_VISIBLE,
+    HWND label2 = CreateWindowExW(0, L"STATIC", L"Password", WS_CHILD | WS_VISIBLE,
                                   28, 92, 110, 24, dialog, nullptr, g_instance, nullptr);
     state.editPassword = CreateWindowExW(0, L"EDIT", L"",
                                          WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                              ES_PASSWORD | ES_AUTOHSCROLL,
                                          150, 86, 382, 40, dialog, nullptr, g_instance, nullptr);
-    SendMessageW(state.editPassword, EM_SETCUEBANNER, TRUE, (LPARAM)L"可留空");
-    HWND label3 = CreateWindowExW(0, L"STATIC", L"对战模式", WS_CHILD | WS_VISIBLE,
+    SendMessageW(state.editPassword, EM_SETCUEBANNER, TRUE, (LPARAM)L"optional");
+    HWND label3 = CreateWindowExW(0, L"STATIC", L"Match mode", WS_CHILD | WS_VISIBLE,
                                   28, 154, 110, 24, dialog, nullptr, g_instance, nullptr);
 
     const wchar_t* modeTexts[5] = {L"1v1", L"2v2", L"3v3", L"4v4", L"5v5"};
@@ -3278,13 +3281,13 @@ bool ShowCreateRoomDialog(std::wstring& room, std::wstring& password, int& mode)
     }
 
     HWND hint = CreateWindowExW(0, L"STATIC",
-                                L"创建后你会自动进入房间，把房间号告诉其他玩家。",
+                                L"You enter the room automatically; share the room code with the other players.",
                                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                                 28, 198, 504, 40, dialog, nullptr, g_instance, nullptr);
-    HWND ok = CreateWindowExW(0, L"BUTTON", L"创建", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+    HWND ok = CreateWindowExW(0, L"BUTTON", L"Create", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                   BS_OWNERDRAW,
                               170, 252, 100, 42, dialog, (HMENU)ID_DLG_OK, g_instance, nullptr);
-    HWND cancel = CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+    HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                       BS_OWNERDRAW,
                                   290, 252, 100, 42, dialog, (HMENU)ID_DLG_CANCEL,
                                   g_instance, nullptr);
@@ -3311,12 +3314,12 @@ bool ShowPasswordDialog(const std::wstring& room, std::wstring& password) {
     RECT rc{0, 0, 380, 190};
     AdjustWindowRect(&rc, WS_POPUP | WS_CAPTION | WS_SYSMENU, FALSE);
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"NetGoal11RoomDialog",
-                                  L"加入房间", WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                                  L"JOIN ROOM", WS_POPUP | WS_CAPTION | WS_SYSMENU,
                                   CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left,
                                   rc.bottom - rc.top, g_hwnd, nullptr, g_instance, nullptr);
     if (!dialog) return false;
 
-    std::wstring labelText = L"房间 " + room + L" 需要密码";
+    std::wstring labelText = L"Room " + room + L" requires a password";
     HWND label = CreateWindowExW(0, L"STATIC", labelText.c_str(), WS_CHILD | WS_VISIBLE,
                                  24, 22, 330, 24, dialog, nullptr, g_instance, nullptr);
     state.editPassword = CreateWindowExW(0, L"EDIT", L"",
@@ -3325,10 +3328,10 @@ bool ShowPasswordDialog(const std::wstring& room, std::wstring& password) {
                                          20, 54, 340, 40, dialog, nullptr, g_instance, nullptr);
     SendMessageW(state.editPassword, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                  MAKELPARAM(10, 10));
-    HWND ok = CreateWindowExW(0, L"BUTTON", L"加入", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+    HWND ok = CreateWindowExW(0, L"BUTTON", L"Join", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                   BS_OWNERDRAW,
                               90, 120, 90, 40, dialog, (HMENU)ID_DLG_OK, g_instance, nullptr);
-    HWND cancel = CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+    HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                       BS_OWNERDRAW,
                                   200, 120, 90, 40, dialog, (HMENU)ID_DLG_CANCEL,
                                   g_instance, nullptr);
@@ -3365,7 +3368,7 @@ void PaintWindow(HWND hwnd) {
         DrawIconEx(dc, 12, 10, g_iconLarge, 28, 28, 0, nullptr, DI_NORMAL);
     }
     SetBkMode(dc, TRANSPARENT);
-    DrawTitleParts(dc, 52, 0, kTitleBarHeight, L"Net Goal ", L"11", L" 对战系统",
+    DrawTitleParts(dc, 52, 0, kTitleBarHeight, L"Net Goal ", L"11", L" LAN Play",
                    g_bannerFont, RGB(255, 245, 238), RGB(255, 210, 140));
     // Draw both caption buttons with the same visual weight.  Using font
     // glyphs made the em dash look much larger than the close cross.
@@ -3428,15 +3431,15 @@ void PaintWindow(HWND hwnd) {
     FillRoundedRect(dc, center, RGB(16, 17, 17), RGB(105, 88, 45), 12);
     FillRoundedRect(dc, right, RGB(16, 17, 17), RGB(105, 88, 45), 12);
 
-    DrawTitlePlate(dc, 12, 160, 240, 30, L"对战游戏平台 (1)", g_font, false);
-    DrawTitlePlate(dc, 790, 160, 246, 30, L"我的设置", g_font, false);
-    DrawTitlePlate(dc, 282, 164, 200, 30, L"游戏房间列表", g_font, false);
+    DrawTitlePlate(dc, 12, 160, 240, 30, L"LAN games (1)", g_font, false);
+    DrawTitlePlate(dc, 790, 160, 246, 30, L"MY SETTINGS", g_font, false);
+    DrawTitlePlate(dc, 282, 164, 200, 30, L"GAME ROOMS", g_font, false);
 
     SelectObject(dc, g_smallFont);
     SetTextColor(dc, RGB(190, 178, 150));
-    TextOutW(dc, 800, 190, L"昵称", 2);
-    TextOutW(dc, 800, 258, L"游戏路径 (主程序.exe)", (int)wcslen(L"游戏路径 (主程序.exe)"));
-    TextOutW(dc, 800, 438, L"运行日志", 4);
+    TextOutW(dc, 800, 190, L"Nickname", (int)wcslen(L"Nickname"));
+    TextOutW(dc, 800, 258, L"Game path (main .exe)", (int)wcslen(L"Game path (main .exe)"));
+    TextOutW(dc, 800, 438, L"RUN LOG", (int)wcslen(L"RUN LOG"));
     DrawBevelFrame(dc, 800, 214, 226, 30);
     DrawBevelFrame(dc, 800, 282, 226, 30);
     DrawBevelFrame(dc, 800, 462, 226, 186);
@@ -3463,8 +3466,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             g_hwnd = hwnd;
             CreateControls();
             DragAcceptFiles(hwnd, TRUE);
-            if (!g_loginDisplayName.empty()) AppendLog(L"登录用户: " + g_loginDisplayName);
-            AppendLog(L"客户端已启动。");
+            if (!g_loginDisplayName.empty()) AppendLog(L"Signed in as: " + g_loginDisplayName);
+            AppendLog(L"Client started.");
             if (StartLobbyNet(g_serverAddress, g_serverPort)) {
                 SendLobbyBrowse();
             }
@@ -3476,14 +3479,14 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 case ID_NEW_ROOM: CreateRoomClicked(); break;
                 case ID_REFRESH_ROOMS:
                     SendLobbyBrowse();
-                    SetStatus(L"正在刷新房间列表...");
+                    SetStatus(L"Refreshing the room list...");
                     break;
                 case ID_JOIN_ROOM: break;
                 case ID_LEAVE_ROOM:
                 case ID_ROOM_LEAVE:
                     LeaveLobby(true);
-                    SetStatus(L"已离开房间");
-                    AppendLog(L"已离开房间。");
+                    SetStatus(L"Left the room");
+                    AppendLog(L"Left the room.");
                     break;
                 case ID_START_MATCH: StartGameClicked(); break;
                 case ID_MODE_11: g_roomMode = 1; UpdateLobbyUi(); break;
@@ -3511,21 +3514,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 case ID_TAB_ROOM: ShowTab(1); break;
                 case ID_HELP:
                     MessageBoxW(hwnd,
-                                L"Net Goal 11 对战系统使用步骤：\n\n"
-                                L"1. 在首页右侧设置昵称，并选择游戏主程序的路径。\n"
-                                L"2. 点“新建房间”，选择 1v1～5v5 并创建，房主会自动进入房间。\n"
-                                L"3. 其他玩家在首页房间列表中点“加入房间”。\n"
-                                L"4. 房间内至少 2 人后，房主点“开始比赛”，双方游戏自动启动。\n"
-                                L"5. 房主可在房间内把其他玩家移出房间。",
-                                L"查看帮助", MB_OK | MB_ICONINFORMATION);
+                                L"Net Goal 11 usage:\n\n"
+                                L"1. Set your nickname on the right and choose the game executable.\n"
+                                L"2. Click \"New Room\", pick 1v1-5v5 and create it; you enter the room automatically.\n"
+                                L"3. Other players click \"Join\" in the room list on the home page.\n"
+                                L"4. With at least 2 players, the host clicks \"Start Match\" and both games launch automatically.\n"
+                                L"5. The host can kick other players from the room.",
+                                L"Help", MB_OK | MB_ICONINFORMATION);
                     break;
                 case ID_SETTINGS:
                     break;
                 case ID_ABOUT:
                     MessageBoxW(hwnd,
-                                L"Net Goal 11 对战系统\n" NETGOAL11_VERSION L"\n原生 C++ 直连版\n\n"
-                                L"默认昵称：net11",
-                                L"关于软件", MB_OK | MB_ICONINFORMATION);
+                                L"Net Goal 11 LAN Play\n" NETGOAL11_VERSION L"\nNative C++ direct-connect build\n\n"
+                                L"Default nickname: net11",
+                                L"About", MB_OK | MB_ICONINFORMATION);
                     break;
                 case ID_EXIT_APP:
                     DestroyWindow(hwnd);
@@ -3649,12 +3652,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                     if (g_lobbyRetry < 3) {
                         ++g_lobbyRetry;
                         SendLobbyRequest(g_pendingLobbyType);
-                        AppendLog(L"房间服务器没有响应，正在重试...");
+                        AppendLog(L"The room server is not responding; retrying...");
                     } else {
                         g_lobbyWaiting = false;
                         g_pendingLobbyType = 0;
-                        SetStatus(L"房间服务器没有响应，请检查网络后重试");
-                        AppendLog(L"房间服务器没有响应，请重试。");
+                        SetStatus(L"The room server is not responding; check your network and retry");
+                        AppendLog(L"The room server is not responding; please retry.");
                         UpdateLobbyUi();
                     }
                 } else if (g_inLobby) {
@@ -3687,7 +3690,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             if (DragQueryFileW(drop, 0, path, MAX_PATH)) {
                 SetText(g_game, path);
                 ShowTab(0);
-                AppendLog(L"已选择游戏: " + std::wstring(path));
+                AppendLog(L"Selected game: " + std::wstring(path));
             }
             DragFinish(drop);
             return 0;
@@ -3783,7 +3786,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        MessageBoxW(nullptr, L"WSAStartup 失败", L"Net Goal 11", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, L"WSAStartup failed", L"Net Goal 11", MB_OK | MB_ICONERROR);
         return 1;
     }
 
@@ -3810,12 +3813,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     cls.hIcon = g_iconLarge ? g_iconLarge : LoadIconW(nullptr, IDI_APPLICATION);
     cls.hIconSm = g_iconSmall ? g_iconSmall : cls.hIcon;
     if (!RegisterClassExW(&cls)) {
-        MessageBoxW(nullptr, L"注册窗口类失败", L"Net Goal 11", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, L"Failed to register the window class", L"Net Goal 11", MB_OK | MB_ICONERROR);
         WSACleanup();
         return 1;
     }
 
-    std::wstring title = L"Net Goal 11 对战系统 " NETGOAL11_VERSION;
+    std::wstring title = L"Net Goal 11 LAN Play " NETGOAL11_VERSION;
     HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW | WS_EX_COMPOSITED,
                                 cls.lpszClassName, title.c_str(),
                                 WS_POPUP | WS_CLIPCHILDREN,
@@ -3823,7 +3826,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                                 kClientWidth, kClientHeight,
                                 nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
-        MessageBoxW(nullptr, L"创建窗口失败", L"Net Goal 11", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr, L"Failed to create the window", L"Net Goal 11", MB_OK | MB_ICONERROR);
         WSACleanup();
         return 1;
     }

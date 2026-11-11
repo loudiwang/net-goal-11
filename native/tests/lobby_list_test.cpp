@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
     if (length >= sizeof(LobbyChatMessagePayload)) {
         const auto* welcome = reinterpret_cast<const LobbyChatMessagePayload*>(payload);
         std::string text(welcome->text, strnlen(welcome->text, sizeof(welcome->text)));
-        Check(welcome->system != 0 && text.find("欢迎") != std::string::npos &&
+        Check(welcome->system != 0 && text.find("Welcome ") != std::string::npos &&
                   text.find("BROWSE1") != std::string::npos,
               "join welcome text contains player and room");
     }
@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
     Check(WaitFor(guest, MessageType::Error, payload, length), "kicked guest receives Error");
     if (length) {
         std::string text((const char*)payload, length);
-        Check(text.find("移出房间") != std::string::npos, "kick error text mentions removal");
+        Check(text.find("Kick from room") != std::string::npos, "kick error text mentions removal");
     }
     Check(WaitFor(host, MessageType::LobbyState, payload, length), "host gets state after kick");
     Browse(guest, list);

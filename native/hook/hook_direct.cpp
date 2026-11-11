@@ -399,11 +399,11 @@ static DWORD WINAPI RelayThread(LPVOID)
         return 0;
     }
 
-    SendRelayStatus(fr::RelayConnecting, "正在连接中继服务器...");
+    SendRelayStatus(fr::RelayConnecting, "Connecting to the relay server...");
     sockaddr_in server{};
     if (!ResolveServer(server))
     {
-        SendRelayStatus(fr::RelayError, "无法解析中继服务器地址");
+        SendRelayStatus(fr::RelayError, "Cannot resolve the relay server address");
         g_relayRunning.store(false);
         return 0;
     }
@@ -411,7 +411,7 @@ static DWORD WINAPI RelayThread(LPVOID)
     SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET)
     {
-        SendRelayStatus(fr::RelayError, "创建中继 UDP 套接字失败");
+        SendRelayStatus(fr::RelayError, "Failed to create the relay UDP socket");
         g_relayRunning.store(false);
         return 0;
     }
@@ -428,7 +428,7 @@ static DWORD WINAPI RelayThread(LPVOID)
     if (connect(s, (const sockaddr*)&server, sizeof(server)) != 0)
     {
         LogError("relay connect %s:%d failed: %d", g_cfg.serverHost.c_str(), g_cfg.serverPort, WSAGetLastError());
-        SendRelayStatus(fr::RelayError, "连接中继服务器失败");
+        SendRelayStatus(fr::RelayError, "Failed to connect to the relay server");
         closesocket(s);
         g_relayRunning.store(false);
         return 0;
@@ -468,7 +468,7 @@ static DWORD WINAPI RelayThread(LPVOID)
         {
             if (helloAttempts >= 8)
             {
-                SendRelayStatus(fr::RelayError, "连接中继服务器超时");
+                SendRelayStatus(fr::RelayError, "Timed out connecting to the relay server");
                 LogError("relay hello timeout");
                 break;
             }
@@ -524,7 +524,7 @@ static DWORD WINAPI RelayThread(LPVOID)
                     if (!fr::DecodeHelloAck(buffer + fr::kHeaderSize, header.length, subnet, mask,
                                             room, ips, names, count))
                     {
-                        SendRelayStatus(fr::RelayError, "服务器返回了无效的 HelloAck");
+                        SendRelayStatus(fr::RelayError, "The server returned an invalid HelloAck");
                         break;
                     }
                     {
@@ -543,7 +543,7 @@ static DWORD WINAPI RelayThread(LPVOID)
                             IpToString(g_cfg.subnet).c_str(), IpToString(g_cfg.mask).c_str(),
                             (unsigned long long)header.token);
                     char status[160];
-                    snprintf(status, sizeof(status), "已连接中继，虚拟 IP %s",
+                    snprintf(status, sizeof(status), "Relay connected, virtual IP %s",
                              IpToString(g_cfg.selfVirt).c_str());
                     SendRelayStatus(fr::RelayConnected, status);
                     uint16_t peerLength = (uint16_t)(header.length - (8 + fr::kRoomLength));
@@ -604,7 +604,7 @@ static DWORD WINAPI RelayThread(LPVOID)
             }
             if (now - lastPong > std::chrono::seconds(25))
             {
-                SendRelayStatus(fr::RelayError, "中继服务器心跳超时");
+                SendRelayStatus(fr::RelayError, "Relay server heartbeat timed out");
                 LogError("relay heartbeat timeout");
                 break;
             }
@@ -623,7 +623,7 @@ static DWORD WINAPI RelayThread(LPVOID)
                          0, 0, 0, 0, 0);
         send(s, (const char*)bye, sizeof(bye), 0);
         char status[160];
-        snprintf(status, sizeof(status), "中继已断开，虚拟 IP %s",
+        snprintf(status, sizeof(status), "Relay disconnected, virtual IP %s",
                  IpToString(g_cfg.selfVirt).c_str());
         SendRelayStatus(fr::RelayDisconnected, status);
     }
@@ -643,7 +643,7 @@ static void StartRelay()
     if (!g_relayThread)
     {
         g_relayRunning.store(false, std::memory_order_relaxed);
-        SendRelayStatus(fr::RelayError, "创建中继线程失败");
+        SendRelayStatus(fr::RelayError, "Failed to create the relay thread");
     }
 }
 
@@ -1757,7 +1757,7 @@ static DWORD WINAPI IpcReceiveThread(LPVOID)
             break;
         case IpcRelayStop:
             StopRelay();
-            SendRelayStatus(fr::RelayDisconnected, "已断开中继");
+            SendRelayStatus(fr::RelayDisconnected, "Relay disconnected");
             break;
         case IpcChat:
             if (header->len > 0)
@@ -1766,7 +1766,7 @@ static DWORD WINAPI IpcReceiveThread(LPVOID)
                 if (!RelaySendChat(text))
                 {
                     uint8_t reply[fr::kMaxPayload];
-                    size_t replyLength = fr::EncodeChat(reply, "系统", "尚未连接中继，聊天发送失败");
+                    size_t replyLength = fr::EncodeChat(reply, "System", "Not connected to the relay; chat not sent");
                     SendIpc(IpcChat, 0, 0, 0, 0, reply, (uint16_t)replyLength);
                 }
             }

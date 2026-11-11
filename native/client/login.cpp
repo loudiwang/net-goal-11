@@ -335,23 +335,23 @@ void DoLogin() {
 
     if (server.empty()) {
         SetFocus(g_server);
-        SetStatus(L"请输入服务器 IP", true);
+        SetStatus(L"Enter the server IP", true);
         return;
     }
     int port = _wtoi(portText.c_str());
     if (portText.empty() || port < 1 || port > 65535) {
         SetFocus(g_port);
-        SetStatus(L"请输入 1-65535 之间的端口", true);
+        SetStatus(L"Enter a port between 1 and 65535", true);
         return;
     }
     if (account.empty()) {
         SetFocus(g_account);
-        SetStatus(L"请输入昵称", true);
+        SetStatus(L"Enter a nickname", true);
         return;
     }
     if (password.empty()) {
         SetFocus(g_password);
-        SetStatus(L"请输入密码", true);
+        SetStatus(L"Enter the password", true);
         return;
     }
 
@@ -359,7 +359,7 @@ void DoLogin() {
     std::wstring expectedPassword = g_expectedPassword.empty() ? kDefaultPassword
                                                                : g_expectedPassword;
     if (password != expectedPassword) {
-        SetStatus(L"密码错误", true);
+        SetStatus(L"Wrong password", true);
         SetFocus(g_password);
         SendMessageW(g_password, EM_SETSEL, 0, -1);
         return;
@@ -582,10 +582,10 @@ void PaintLogin(HWND hwnd) {
     SelectObject(dc, oldPen);
     DeleteObject(divider);
 
-    DrawLoginField(dc, kFieldX, kServerY, kFieldW, kFieldH, L"服务器 IP");
-    DrawLoginField(dc, kFieldX, kPortY, kFieldW, kFieldH, L"端口");
-    DrawLoginField(dc, kFieldX, kAccountY, kFieldW, kFieldH, L"昵称");
-    DrawLoginField(dc, kFieldX, kPasswordY, kFieldW, kFieldH, L"密码");
+    DrawLoginField(dc, kFieldX, kServerY, kFieldW, kFieldH, L"Server IP");
+    DrawLoginField(dc, kFieldX, kPortY, kFieldW, kFieldH, L"Port");
+    DrawLoginField(dc, kFieldX, kAccountY, kFieldW, kFieldH, L"Nickname");
+    DrawLoginField(dc, kFieldX, kPasswordY, kFieldW, kFieldH, L"Password");
 
     SelectObject(dc, g_logoFont);
     auto drawLogoPart = [&](const wchar_t* text, int x, int y, COLORREF color) {
@@ -612,7 +612,7 @@ void PaintLogin(HWND hwnd) {
     // The tagline spans the exact width of the logo above it. GDI ignores
     // negative inter-character spacing, so drive the glyph advances directly.
     // The "11" is drawn in the same red as the logo numeral.
-    const wchar_t* subtitle = L"登录Net Goal 11对战平台";
+    const wchar_t* subtitle = L"Sign in to Net Goal 11";
     const int subtitleLen = (int)wcslen(subtitle);
     const std::wstring subtitleText(subtitle);
     size_t foundNumber = subtitleText.find(L"11");
@@ -752,7 +752,7 @@ void CreateControls() {
     g_passwordProc = (WNDPROC)SetWindowLongPtrW(g_password, GWLP_WNDPROC,
                                                 (LONG_PTR)LoginEditProc);
 
-    g_login = MakeButton(ID_LOGIN, L"登 录", kFieldX, kLoginY, kFieldW, 66);
+    g_login = MakeButton(ID_LOGIN, L"SIGN IN", kFieldX, kLoginY, kFieldW, 66);
 
     g_status = MakeLabel(L"", kFieldX, kStatusY, kFieldW, 22);
 
@@ -835,7 +835,7 @@ void DrawLoginButton(HDC dc, const RECT& rc, bool pressed, HWND hwndItem) {
     SelectObject(dc, g_loginFont);
     RECT textRect = rc;
     if (pressed) OffsetRect(&textRect, 0, 1);
-    DrawTextW(dc, L"登 录", -1, &textRect,
+    DrawTextW(dc, L"SIGN IN", -1, &textRect,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -1051,7 +1051,7 @@ bool ShowLoginWindow(HINSTANCE instance, const std::wstring& defaultApiBase,
 
     HWND hwnd = CreateWindowExW(
         WS_EX_APPWINDOW | WS_EX_CONTROLPARENT, cls.lpszClassName,
-        L"Net Goal 11 对战系统 " NETGOAL11_VERSION L" - 登录", WS_POPUP | WS_CLIPCHILDREN,
+        L"Net Goal 11 LAN Play " NETGOAL11_VERSION L" - Sign in", WS_POPUP | WS_CLIPCHILDREN,
         x, y, kWidth, kHeight, nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
         if (g_background) {
